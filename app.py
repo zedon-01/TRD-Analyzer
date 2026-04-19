@@ -867,10 +867,11 @@ with st.sidebar:
         # api_key and ai_provider are handled at the top of the script
         pass
 
-        # If key is missing from secrets, allow manual input (hidden by default)
-        if not api_key:
-            api_key = st.text_input("Vložte API Key:", type="password", help="Vložte svůj Gemini nebo OpenAI API klíč.")
-            ai_provider = st.radio("Provider:", ["Gemini", "OpenAI"], horizontal=True)
+        # Always allow manual override for testing new keys
+        manual_key = st.text_input("Vložte API Key (Override):", type="password", help="Vložte svůj nový klíč pro přepsání toho v secrets.")
+        if manual_key:
+            api_key = manual_key
+            ai_provider = "Gemini" if manual_key.startswith("AIza") else "OpenAI"
 
         st.divider()
         st.markdown("##### Mini-Widget Symbols")
