@@ -800,7 +800,10 @@ Požaduji, abys vygeneroval detailní odpověď jako validní JSON objekt bez Ma
                     return json.loads(response.text)
                 except Exception as e:
                     last_err = e
-                    continue # Try next model
+                    if "429" in str(e):
+                        st.warning("⚠️ Dosáhli jste limitu (Quota 429) u Google Gemini. Prosím počkejte 1-2 minuty před dalším pokusem.")
+                        break # Stop trying other models to save quota
+                    continue # Try next model if it's not a rate limit error
             
             # If all models failed
             st.error(f"⚠️ Všechny AI modely selhaly (Quota/API). Poslední chyba: {last_err}")
@@ -1302,6 +1305,9 @@ if ticker:
                                             break
                                         except Exception as e:
                                             last_chat_err = str(e)
+                                            if "429" in str(last_chat_err):
+                                                response_text = "⚠️ Dosáhli jste limitu dotazů (Quota 429). Prosím počkejte chvíli a zkuste to znovu."
+                                                break
                                             continue
                                     
                                     if response_text is None:
