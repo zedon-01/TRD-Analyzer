@@ -1278,8 +1278,8 @@ if ticker:
                                         chat_full_prompt += f"{m['role']}: {m['content']}\n"
                                     chat_full_prompt += f"user: {prompt}"
                                     
-                                    # Use ONLY verified stable models
-                                    chat_models = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-pro']
+                                    # Use ONLY verified stable models with full prefix
+                                    chat_models = ['models/gemini-1.5-flash', 'models/gemini-2.0-flash', 'models/gemini-1.5-pro', 'gemini-1.5-flash', 'gemini-2.0-flash']
                                     response_text = None
                                     last_chat_err = "Neznámá chyba"
                                     
