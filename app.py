@@ -11,6 +11,18 @@ import google.generativeai as genai
 from datetime import datetime, timedelta
 import pytz # Potřebné pro korektní časová pásma
 
+# --- API Key Detection (Global Scope) ---
+ai_provider = "Gemini"
+api_key = ""
+try:
+    if "GEMINI_API_KEY" in st.secrets:
+        api_key = st.secrets["GEMINI_API_KEY"]
+    elif "OPENAI_API_KEY" in st.secrets:
+        api_key = st.secrets["OPENAI_API_KEY"]
+        ai_provider = "OpenAI"
+except Exception:
+    pass
+
 # --- Streamlit Page Config ---
 st.set_page_config(page_title="Trading Analyzer", layout="wide", initial_sidebar_state="expanded")
 
@@ -848,18 +860,15 @@ with st.sidebar:
             elif selected_interval == "1mo": st.session_state.tf_period = "max"
             else: st.session_state.tf_period = "5y"
             st.rerun()
-        # Silent API Loading
-        ai_provider = "Gemini"
-        api_key = ""
-        try:
-            if "GEMINI_API_KEY" in st.secrets:
-                api_key = st.secrets["GEMINI_API_KEY"]
-            elif "OPENAI_API_KEY" in st.secrets:
-                ai_provider = "OpenAI"
-                api_key = st.secrets["OPENAI_API_KEY"]
-        except Exception:
-            pass
-            
+
+        # api_key and ai_provider are handled at the top of the script
+        pass
+
+        # If key is missing from secrets, allow manual input (hidden by default)
+        if not api_key:
+            api_key = st.text_input("Vložte API Key:", type="password", help="Vložte svůj Gemini nebo OpenAI API klíč.")
+            ai_provider = st.radio("Provider:", ["Gemini", "OpenAI"], horizontal=True)
+          
         if not api_key:
             api_key = st.text_input("API Key (Manual):", value="", type="password", help="Vložte Gemini nebo OpenAI klíč, pokud není v secrets.")
 
@@ -1278,8 +1287,8 @@ if ticker:
                                         chat_full_prompt += f"{m['role']}: {m['content']}\n"
                                     chat_full_prompt += f"user: {prompt}"
                                     
-                                    # Use ONLY verified stable models with full prefix
-                                    chat_models = ['models/gemini-1.5-flash', 'models/gemini-2.0-flash', 'models/gemini-1.5-pro', 'gemini-1.5-flash', 'gemini-2.0-flash']
+                                    # Robust Sync with generate_analysis models
+                                    chat_models = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-flash-latest']
                                     response_text = None
                                     last_chat_err = "Neznámá chyba"
                                     
