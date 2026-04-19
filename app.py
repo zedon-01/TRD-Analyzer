@@ -808,6 +808,8 @@ Požaduji, abys vygeneroval detailní odpověď jako validní JSON objekt bez Ma
             # Detailed Error Reporting
             st.error(f"⚠️ AI Engine narazil na problém. Diagnostika: {last_err}")
             with st.expander("🔍 Technické detaily pro podporu"):
+                masked_key = f"{api_key[:4]}...{api_key[-4:]}" if api_key and len(api_key) > 8 else "Nenalezen"
+                st.write(f"Aktivní API Klíč: `{masked_key}`")
                 st.write(f"Provider: {provider}")
                 st.write(f"Ticker: {ticker}")
                 st.write(f"Interval: {st.session_state.tf_interval}")
