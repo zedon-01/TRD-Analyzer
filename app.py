@@ -801,19 +801,13 @@ Požaduji, abys vygeneroval detailní odpověď jako validní JSON objekt bez Ma
                 except Exception as e:
                     last_err = f"{type(e).__name__}: {str(e)}"
                     if "429" in str(e):
-                        st.warning("⚠️ Dosáhli jste limitu (Quota 429) u Google Gemini. Prosím počkejte 1-2 minuty před dalším pokusem.")
+                        st.warning("⚠️ Dosáhli jste denního limitu (Quota 429) u Google Gemini. Zkuste to prosím později nebo použijte klíč z nového projektu.")
                         break 
                     continue 
             
-            # Detailed Error Reporting
-            st.error(f"⚠️ AI Engine narazil na problém. Diagnostika: {last_err}")
-            with st.expander("🔍 Technické detaily pro podporu"):
-                masked_key = f"{api_key[:4]}...{api_key[-4:]}" if api_key and len(api_key) > 8 else "Nenalezen"
-                st.write(f"Aktivní API Klíč: `{masked_key}`")
-                st.write(f"Provider: {provider}")
-                st.write(f"Ticker: {ticker}")
-                st.write(f"Interval: {st.session_state.tf_interval}")
-                st.code(f"Error Log: {last_err}")
+            # Simplified Error Reporting
+            if last_err:
+                st.error(f"⚠️ AI analýza se nezdařila. Důvod: {last_err}")
             return {}
             
     except Exception as e:
