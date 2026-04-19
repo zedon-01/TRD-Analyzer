@@ -868,9 +868,6 @@ with st.sidebar:
         if not api_key:
             api_key = st.text_input("Vložte API Key:", type="password", help="Vložte svůj Gemini nebo OpenAI API klíč.")
             ai_provider = st.radio("Provider:", ["Gemini", "OpenAI"], horizontal=True)
-          
-        if not api_key:
-            api_key = st.text_input("API Key (Manual):", value="", type="password", help="Vložte Gemini nebo OpenAI klíč, pokud není v secrets.")
 
         st.divider()
         st.markdown("##### Mini-Widget Symbols")
