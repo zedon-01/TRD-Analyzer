@@ -725,13 +725,13 @@ def generate_analysis(ticker, df, fundamentals, provider, api_key, news=None):
     prev_row = df.iloc[-2] if len(df) > 1 else df.iloc[-1]
     
     tech_str = f"""
-    Poslední cena (Close): {last_row.get('Close', 'N/A'):.2f}
-    RSI (14): {last_row.get('RSI', 'N/A'):.2f}
-    MACD: {last_row.get('MACD', 'N/A'):.2f} (Signal: {last_row.get('MACD_Signal', 'N/A'):.2f})
-    SMA 20: {last_row.get('SMA_20', 'N/A'):.2f}
-    SMA 50: {last_row.get('SMA_50', 'N/A'):.2f}
-    SMA 200: {last_row.get('SMA_200', 'N/A'):.2f}
-    20-day Volatilita (BBand šířka %): {((last_row.get('BB_High', 0) - last_row.get('BB_Low', 0)) / last_row.get('Close', 1) * 100):.2f}%
+    Poslední cena (Close): {last_row.get('Close', 0):.2f}
+    RSI (14): {last_row.get('RSI', 0):.2f}
+    MACD: {last_row.get('MACD', 0):.2f} (Signal: {last_row.get('MACD_Signal', 0):.2f})
+    SMA 20: {last_row.get('SMA_20', 0):.2f}
+    SMA 50: {last_row.get('SMA_50', 0):.2f}
+    SMA 200: {last_row.get('SMA_200', 0):.2f}
+    20-day Volatilita (BBand šířka %): {((float(last_row.get('BB_High', 0)) - float(last_row.get('BB_Low', 0))) / float(last_row.get('Close', 1)) * 100):.2f}%
     """
 
     news_str = ""
@@ -956,9 +956,9 @@ if ticker:
 
         with kpi_col1:
             with st.container(border=True):
-                current_price = df_processed['Close'].iloc[-1]
-                prev_price = df_processed['Close'].iloc[-2] if len(df_processed) > 1 else current_price
-                price_change = current_price - prev_price
+                current_price = float(df_processed['Close'].iloc[-1])
+                prev_price = float(df_processed['Close'].iloc[-2]) if len(df_processed) > 1 else current_price
+                price_change = float(current_price - prev_price)
                 pct_change = (price_change / prev_price) * 100 if prev_price != 0 else 0
                 
                 color = "#10B981" if price_change >= 0 else "#EF4444"
@@ -966,10 +966,10 @@ if ticker:
                 
                 # Adaptive rounding based on price magnitude
                 if current_price >= 1:
-                    price_fmt = f"${current_price:,.2f}"
+                    price_fmt = f"${float(current_price):,.2f}"
                     change_fmt = f"${abs(price_change):.2f}"
                 elif current_price >= 0.01:
-                    price_fmt = f"${current_price:,.4f}"
+                    price_fmt = f"${float(current_price):,.4f}"
                     change_fmt = f"${abs(price_change):.4f}"
                 else:
                     price_fmt = f"${current_price:,.6f}"
