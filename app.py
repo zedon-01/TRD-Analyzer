@@ -373,6 +373,12 @@ def fetch_news(ticker_symbol):
 def get_technical_signals(df):
     """Generates a summary of technical signals for the Health Check panel."""
     if df.empty: return {}
+    
+    # Check if indicators are present
+    required_cols = ['RSI', 'MACD', 'MACD_Signal', 'SMA_50']
+    if not all(col in df.columns for col in required_cols):
+        return {} # Not enough data to show signals
+        
     last = df.iloc[-1]
     
     signals = {
@@ -839,7 +845,8 @@ with st.sidebar:
             if selected_interval == "1m": st.session_state.tf_period = "7d"
             elif selected_interval in ["5m", "15m", "30m"]: st.session_state.tf_period = "60d"
             elif selected_interval == "1h": st.session_state.tf_period = "2y"
-            else: st.session_state.tf_period = "1y"
+            elif selected_interval == "1mo": st.session_state.tf_period = "max"
+            else: st.session_state.tf_period = "5y"
             st.rerun()
         # Silent API Loading
         ai_provider = "Gemini"
@@ -948,6 +955,17 @@ if ticker:
                 color = "#10B981" if price_change >= 0 else "#EF4444"
                 arrow = "▲" if price_change >= 0 else "▼"
                 
+                # Adaptive rounding based on price magnitude
+                if current_price >= 1:
+                    price_fmt = f"${current_price:,.2f}"
+                    change_fmt = f"${abs(price_change):.2f}"
+                elif current_price >= 0.01:
+                    price_fmt = f"${current_price:,.4f}"
+                    change_fmt = f"${abs(price_change):.4f}"
+                else:
+                    price_fmt = f"${current_price:,.6f}"
+                    change_fmt = f"${abs(price_change):.6f}"
+
                 st.markdown(f"""
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 10px;">
                     <h3 style='margin:0; font-size: 1.2rem;'>Asset Price</h3>
@@ -955,10 +973,10 @@ if ticker:
                 </div>
                 <div style="padding: 6px 0;">
                     <div style="font-size: 2.2rem; font-weight: 700; color: #F8FAFC; line-height: 1.1;">
-                        ${current_price:.2f}
+                        {price_fmt}
                     </div>
                     <div style="font-size: 1.0rem; color: {color}; font-weight: 600; margin-top: 5px;">
-                        {arrow} ${abs(price_change):.2f} ({abs(pct_change):.2f}%)
+                        {arrow} {change_fmt} ({abs(pct_change):.2f}%)
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
@@ -1251,29 +1269,32 @@ if ticker:
                                 )
                                 response_text = chat_response.choices[0].message.content
                             else: # Gemini
-                                genai.configure(api_key=api_key)
-                                chat_full_prompt = f"{chat_context}\n\nHistorie chatu:\n"
-                                for m in st.session_state.chat_history[:-1]:
-                                    chat_full_prompt += f"{m['role']}: {m['content']}\n"
-                                chat_full_prompt += f"user: {prompt}"
-                                
-                                # Exact same models as in generate_analysis
-                                chat_models = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-flash-latest', 'gemini-1.5-pro', 'gemini-pro']
-                                response_text = None
-                                last_chat_err = "Neznámá chyba"
-                                
-                                for m_name in chat_models:
-                                    try:
-                                        model = genai.GenerativeModel(model_name=m_name)
-                                        response = model.generate_content(chat_full_prompt)
-                                        response_text = response.text
-                                        break
-                                    except Exception as e:
-                                        last_chat_err = str(e)
-                                        continue
-                                
-                                if response_text is None:
-                                    response_text = f"Omlouvám se, ale nepodařilo se spojit s AI modelem. Poslední chyba: {last_chat_err}"
+                                if not api_key:
+                                    response_text = "Chyba: Chybí API klíč pro Gemini."
+                                else:
+                                    genai.configure(api_key=api_key)
+                                    chat_full_prompt = f"{chat_context}\n\nHistorie chatu:\n"
+                                    for m in st.session_state.chat_history[:-1]:
+                                        chat_full_prompt += f"{m['role']}: {m['content']}\n"
+                                    chat_full_prompt += f"user: {prompt}"
+                                    
+                                    # Use ONLY verified stable models
+                                    chat_models = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-pro']
+                                    response_text = None
+                                    last_chat_err = "Neznámá chyba"
+                                    
+                                    for m_name in chat_models:
+                                        try:
+                                            model = genai.GenerativeModel(model_name=m_name)
+                                            response = model.generate_content(chat_full_prompt)
+                                            response_text = response.text
+                                            break
+                                        except Exception as e:
+                                            last_chat_err = str(e)
+                                            continue
+                                    
+                                    if response_text is None:
+                                        response_text = f"Omlouvám se, ale nepodařilo se spojit s AI modelem. Poslední chyba: {last_chat_err}"
                             
                             st.markdown(response_text)
                             st.session_state.chat_history.append({"role": "assistant", "content": response_text})
