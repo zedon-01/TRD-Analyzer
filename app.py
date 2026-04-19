@@ -23,6 +23,9 @@ def get_api_credentials():
         return openai_key, "OpenAI"
     return None, None
 
+# Initialize global vars for UI checks
+api_key, ai_provider = get_api_credentials()
+
 # --- Streamlit Page Config ---
 st.set_page_config(page_title="Trading Analyzer", layout="wide", initial_sidebar_state="expanded")
 
