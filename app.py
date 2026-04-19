@@ -785,10 +785,10 @@ Požaduji, abys vygeneroval detailní odpověď jako validní JSON objekt bez Ma
             genai.configure(api_key=api_key)
             # Robust Fallback Matrix
             models_to_try = [
-                'gemini-2.0-flash',     # Neunovější/Nejrychlejší
-                'gemini-1.5-flash',     # Standardní stabilní
-                'gemini-flash-latest',  # Alias pro nejnovější flash
-                'gemini-1.5-pro'        # Pro model (vysoká kvóta)
+                'models/gemini-1.5-flash',
+                'models/gemini-2.0-flash',
+                'gemini-1.5-flash',
+                'gemini-2.0-flash'
             ]
             
             last_err = None
@@ -1288,7 +1288,12 @@ if ticker:
                                     chat_full_prompt += f"user: {prompt}"
                                     
                                     # Robust Sync with generate_analysis models
-                                    chat_models = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-flash-latest']
+                                    chat_models = [
+                                        'models/gemini-1.5-flash',
+                                        'models/gemini-2.0-flash',
+                                        'gemini-1.5-flash',
+                                        'gemini-2.0-flash'
+                                    ]
                                     response_text = None
                                     last_chat_err = "Neznámá chyba"
                                     
