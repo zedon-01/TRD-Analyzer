@@ -12,16 +12,16 @@ from datetime import datetime, timedelta
 import pytz # Potřebné pro korektní časová pásma
 
 # --- API Key Detection (Global Scope) ---
-ai_provider = "Gemini"
-api_key = ""
-try:
-    if "GEMINI_API_KEY" in st.secrets:
-        api_key = st.secrets["GEMINI_API_KEY"]
-    elif "OPENAI_API_KEY" in st.secrets:
-        api_key = st.secrets["OPENAI_API_KEY"]
-        ai_provider = "OpenAI"
-except Exception:
-    pass
+def get_api_credentials():
+    """Dynamically fetch API keys from secrets to avoid caching issues."""
+    gemini_key = st.secrets.get("GEMINI_API_KEY")
+    openai_key = st.secrets.get("OPENAI_API_KEY")
+    
+    if gemini_key:
+        return gemini_key, "Gemini"
+    elif openai_key:
+        return openai_key, "OpenAI"
+    return None, None
 
 # --- Streamlit Page Config ---
 st.set_page_config(page_title="Trading Analyzer", layout="wide", initial_sidebar_state="expanded")
@@ -714,7 +714,7 @@ def plot_cot_gauge(title, long_pct, short_pct):
     )
     return fig
 
-def generate_analysis(ticker, df, fundamentals, provider, api_key, news=None):
+def generate_analysis(ticker, df, fundamentals, news=None):
     """Generates the AI analysis using the selected provider."""
     
     # Summarize Fundamentals
@@ -767,6 +767,13 @@ Požaduji, abys vygeneroval detailní odpověď jako validní JSON objekt bez Ma
 }}
 """
 
+    # Refresh API key inside the function to ensure we use the latest from secrets
+    api_key, provider = get_api_credentials()
+    
+    if not api_key:
+        st.error("❌ Chybí API klíč! Prosím vložte jej do .streamlit/secrets.toml")
+        return {}
+
     try:
         if provider == "OpenAI":
             client = OpenAI(api_key=api_key)
@@ -785,10 +792,13 @@ Požaduji, abys vygeneroval detailní odpověď jako validní JSON objekt bez Ma
             genai.configure(api_key=api_key)
             # Robust Fallback Matrix
             models_to_try = [
-                'models/gemini-1.5-flash',
+                'models/gemini-2.5-flash',
                 'models/gemini-2.0-flash',
+                'models/gemini-3.1-pro-preview',
+                'models/gemini-flash-latest',
+                'models/gemini-pro-latest',
                 'gemini-1.5-flash',
-                'gemini-2.0-flash'
+                'gemini-pro'
             ]
             
             last_err = None
@@ -805,9 +815,12 @@ Požaduji, abys vygeneroval detailní odpověď jako validní JSON objekt bez Ma
                         break 
                     continue 
             
-            # Simplified Error Reporting
+            # Ultra-Simplified Error Reporting
             if last_err:
-                st.error(f"⚠️ AI analýza se nezdařila. Důvod: {last_err}")
+                if "429" in last_err:
+                    st.error("⚠️ AI analýza se nezdařila: Váš denní limit u Googlu je vyčerpán. Prosím použijte klíč z NOVÉHO PROJEKTU v AI Studiu nebo počkejte na zítřek.")
+                else:
+                    st.error(f"⚠️ AI analýza se nezdařila: {last_err}")
             return {}
             
     except Exception as e:
@@ -1107,14 +1120,15 @@ if ticker:
             st.session_state.current_analysis_ticker = None
 
         if generate_btn:
+            api_key, ai_provider = get_api_credentials()
             if not api_key:
-                st.error("Zadejte prosím API klíč pro spuštění AI analýzy.")
+                st.error("Zadejte prosím API klíč do .streamlit/secrets.toml pro spuštění AI analýzy.")
             else:
                 with st.spinner("Sběr dat a generování posudku..."):
                     try:
                         fundamentals = fetch_fundamentals(ticker)
                         news_context = fetch_news(ticker)
-                        ai_data = generate_analysis(ticker, df_processed, fundamentals, ai_provider, api_key, news=news_context)
+                        ai_data = generate_analysis(ticker, df_processed, fundamentals, news=news_context)
                         
                         if ai_data:
                             st.session_state.ai_analysis_data = ai_data
