@@ -799,14 +799,19 @@ Požaduji, abys vygeneroval detailní odpověď jako validní JSON objekt bez Ma
                     # Success!
                     return json.loads(response.text)
                 except Exception as e:
-                    last_err = e
+                    last_err = f"{type(e).__name__}: {str(e)}"
                     if "429" in str(e):
                         st.warning("⚠️ Dosáhli jste limitu (Quota 429) u Google Gemini. Prosím počkejte 1-2 minuty před dalším pokusem.")
-                        break # Stop trying other models to save quota
-                    continue # Try next model if it's not a rate limit error
+                        break 
+                    continue 
             
-            # If all models failed
-            st.error(f"⚠️ Všechny AI modely selhaly (Quota/API). Poslední chyba: {last_err}")
+            # Detailed Error Reporting
+            st.error(f"⚠️ AI Engine narazil na problém. Diagnostika: {last_err}")
+            with st.expander("🔍 Technické detaily pro podporu"):
+                st.write(f"Provider: {provider}")
+                st.write(f"Ticker: {ticker}")
+                st.write(f"Interval: {st.session_state.tf_interval}")
+                st.code(f"Error Log: {last_err}")
             return {}
             
     except Exception as e:
