@@ -867,11 +867,10 @@ with st.sidebar:
         # api_key and ai_provider are handled at the top of the script
         pass
 
-        # Always allow manual override for testing new keys
-        manual_key = st.text_input("Vložte API Key (Override):", type="password", help="Vložte svůj nový klíč pro přepsání toho v secrets.")
-        if manual_key:
-            api_key = manual_key
-            ai_provider = "Gemini" if manual_key.startswith("AIza") else "OpenAI"
+        # If key is missing from secrets, allow manual input (hidden by default)
+        if not api_key:
+            api_key = st.text_input("Vložte API Key:", type="password", help="Vložte svůj Gemini nebo OpenAI API klíč.")
+            ai_provider = st.radio("Provider:", ["Gemini", "OpenAI"], horizontal=True)
 
         st.divider()
         st.markdown("##### Mini-Widget Symbols")
@@ -1244,84 +1243,3 @@ if ticker:
                 """
                 st.code(export_text.strip(), language="text")
 
-            # --- AI Chat Assistant Section ---
-            st.markdown("<div style='margin-top: 40px;'></div>", unsafe_allow_html=True)
-            st.markdown("<h3 style='font-size: 1.2rem; display: flex; align-items: center; gap: 10px;'>💬 Chat s analytikem <span style='font-size: 0.8rem; font-weight: 400; color: #94A3B8; background: rgba(255,255,255,0.05); padding: 4px 10px; border-radius: 12px;'>Beta</span></h3>", unsafe_allow_html=True)
-            
-            # Display chat history
-            for message in st.session_state.chat_history:
-                with st.chat_message(message["role"]):
-                    st.markdown(message["content"])
-
-            # Chat input
-            if prompt := st.chat_input("Zeptejte se na detaily tohoto setupu..."):
-                # Add user message to history
-                st.session_state.chat_history.append({"role": "user", "content": prompt})
-                with st.chat_message("user"):
-                    st.markdown(prompt)
-
-                # Generate response
-                with st.chat_message("assistant"):
-                    with st.spinner("Přemýšlím..."):
-                        try:
-                            # Construct chat context
-                            chat_context = f"Uživatel se ptá na tuto analýzu: {json.dumps(ai_data, ensure_ascii=False)}. "
-                            chat_context += "Odpovídej stručně, profesionálně a drž se faktů z analýzy."
-                            
-                            if ai_provider == "OpenAI":
-                                client = OpenAI(api_key=api_key)
-                                chat_response = client.chat.completions.create(
-                                    model="gpt-4o",
-                                    messages=[
-                                        {"role": "system", "content": chat_context},
-                                        *st.session_state.chat_history
-                                    ]
-                                )
-                                response_text = chat_response.choices[0].message.content
-                            else: # Gemini
-                                if not api_key:
-                                    response_text = "Chyba: Chybí API klíč pro Gemini."
-                                else:
-                                    genai.configure(api_key=api_key)
-                                    chat_full_prompt = f"{chat_context}\n\nHistorie chatu:\n"
-                                    for m in st.session_state.chat_history[:-1]:
-                                        chat_full_prompt += f"{m['role']}: {m['content']}\n"
-                                    chat_full_prompt += f"user: {prompt}"
-                                    
-                                    # Robust Sync with generate_analysis models
-                                    chat_models = [
-                                        'models/gemini-1.5-flash',
-                                        'models/gemini-2.0-flash',
-                                        'gemini-1.5-flash',
-                                        'gemini-2.0-flash'
-                                    ]
-                                    response_text = None
-                                    last_chat_err = "Neznámá chyba"
-                                    
-                                    for m_name in chat_models:
-                                        try:
-                                            model = genai.GenerativeModel(model_name=m_name)
-                                            response = model.generate_content(chat_full_prompt)
-                                            response_text = response.text
-                                            break
-                                        except Exception as e:
-                                            last_chat_err = str(e)
-                                            if "429" in str(last_chat_err):
-                                                response_text = "⚠️ Dosáhli jste limitu dotazů (Quota 429). Prosím počkejte chvíli a zkuste to znovu."
-                                                break
-                                            continue
-                                    
-                                    if response_text is None:
-                                        response_text = f"Omlouvám se, ale nepodařilo se spojit s AI modelem. Poslední chyba: {last_chat_err}"
-                            
-                            st.markdown(response_text)
-                            st.session_state.chat_history.append({"role": "assistant", "content": response_text})
-                            
-                            # Sync back to history list
-                            for hist in st.session_state.analysis_history:
-                                if f"{hist['ticker']}_{hist['tf']}" == st.session_state.current_analysis_ticker:
-                                    hist['chat'] = st.session_state.chat_history
-                                    break
-                                    
-                        except Exception as e:
-                            st.error(f"Chyba chatu: {e}")
