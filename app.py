@@ -1352,7 +1352,7 @@ else:
                             if test_provider == "Gemini":
                                 import google.generativeai as genai
                                 genai.configure(api_key=test_key.strip())
-                                test_model = genai.GenerativeModel('gemini-1.5-flash-latest')
+                                test_model = genai.GenerativeModel('models/gemini-1.0-pro-001')
                                 test_resp = test_model.generate_content("Say OK")
                                 if test_resp:
                                     st.success(f"✅ Gemini: Připojení v pořádku! (Klíč: ****{test_key[-4:]})")
