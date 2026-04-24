@@ -829,9 +829,9 @@ Požaduji, abys vygeneroval detailní odpověď jako validní JSON objekt bez Ma
             # Use manual model if specified, else try fallbacks
             models_to_try = [st.session_state.manual_model_name] if st.session_state.manual_model_name else []
             models_to_try.extend([
+                'models/gemini-pro',
                 'gemini-1.5-flash',
-                'gemini-1.5-flash-latest',
-                'gemini-1.5-pro-latest',
+                'gemini-1.5-pro',
                 'gemini-pro'
             ])
             # Filter out duplicates while preserving order
