@@ -1323,46 +1323,33 @@ else:
     with set_col2:
         with st.container(border=True):
             st.markdown("### 🧠 AI Engine & API")
-            st.info("Zde můžete ručně přepsat API klíče pro tuto relaci.")
-            new_manual_key = st.text_input("Vlastní API Key:", type="password", value=st.session_state.manual_api_key)
-            new_manual_provider = st.radio("Vyberte poskytovatele:", ["Gemini", "OpenAI"], index=0 if st.session_state.manual_api_provider == "Gemini" else 1, horizontal=True)
+            st.info("Zde můžete vložit svůj API klíč. Změna se uloží automaticky po stisku Enter.")
             
-            if st.button("🔌 Aplikovat API Nastavení", use_container_width=True):
-                st.session_state.manual_api_key = new_manual_key.strip()
-                st.session_state.manual_api_provider = new_manual_provider
-                st.success("API nastavení uloženo pro tuto relaci!")
-                st.rerun()
+            # Direct link to session state via 'key' parameter
+            st.text_input("Vlastní API Key:", type="password", key="manual_api_key", help="Vložte klíč z Google AI Studio nebo OpenAI.")
+            st.radio("Vyberte poskytovatele:", ["Gemini", "OpenAI"], key="manual_api_provider", horizontal=True)
             
             if st.button("🔍 Otestovat připojení", use_container_width=True):
                 test_key, test_provider = get_api_credentials()
-                if not test_key:
-                    st.error("Chybí klíč pro testování!")
+                if not test_key or not test_key.strip():
+                    st.error("Chybí klíč pro testování! Vložte jej do pole výše.")
                 else:
                     with st.spinner("Testuji připojení..."):
                         try:
                             if test_provider == "Gemini":
-                                genai.configure(api_key=test_key)
+                                import google.generativeai as genai
+                                genai.configure(api_key=test_key.strip())
                                 test_model = genai.GenerativeModel('gemini-1.5-flash')
                                 test_resp = test_model.generate_content("Say OK")
-                                if "OK" in test_resp.text:
-                                    st.success("✅ Gemini: Připojení v pořádku!")
-                                else:
-                                    st.warning(f"⚠️ Gemini odpovědělo nečekaně: {test_resp.text}")
+                                if test_resp:
+                                    st.success(f"✅ Gemini: Připojení v pořádku! (Klíč: ****{test_key[-4:]})")
                             else:
                                 from openai import OpenAI
-                                client = OpenAI(api_key=test_key)
+                                client = OpenAI(api_key=test_key.strip())
                                 client.chat.completions.create(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Say OK"}], max_tokens=5)
-                                st.success("✅ OpenAI: Připojení v pořádku!")
+                                st.success(f"✅ OpenAI: Připojení v pořádku! (Klíč: ****{test_key[-4:]})")
                         except Exception as e:
                             st.error(f"❌ Test selhal: {str(e)}")
-
-            # Show active key indicator
-            current_key, _ = get_api_credentials()
-            if current_key:
-                masked_key = f"****{current_key[-4:]}" if len(current_key) > 4 else "****"
-                st.caption(f"Aktivní klíč: `{masked_key}`")
-            else:
-                st.caption("Aktivní klíč: `Nenalezen`")
             
         with st.container(border=True):
             st.markdown("### 🛠️ Systémové Nástroje")
