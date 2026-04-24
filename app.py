@@ -29,6 +29,24 @@ api_key, ai_provider = get_api_credentials()
 # --- Streamlit Page Config ---
 st.set_page_config(page_title="Trading Analyzer", layout="wide", initial_sidebar_state="expanded")
 
+# --- Session State Initialization ---
+if 'current_page' not in st.session_state:
+    st.session_state.current_page = "Dashboard"
+if 'watchlist' not in st.session_state:
+    st.session_state.watchlist = ["BTC-USD", "ETH-USD", "EURUSD=X", "GC=F"]
+if 'dxm_symbol' not in st.session_state:
+    st.session_state.dxm_symbol = "EURUSD=X"
+if 'cot_symbol' not in st.session_state:
+    st.session_state.cot_symbol = "EURUSD=X"
+if 'tf_period' not in st.session_state:
+    st.session_state.tf_period = "1y"
+if 'tf_interval' not in st.session_state:
+    st.session_state.tf_interval = "1d"
+if 'ai_analysis_data' not in st.session_state:
+    st.session_state.ai_analysis_data = None
+if 'analysis_history' not in st.session_state:
+    st.session_state.analysis_history = []
+
 # No base64 needed, pure CSS logo used.
 
 # --- CSS Injection ---
@@ -862,402 +880,454 @@ with st.sidebar:
         </div>
         """, unsafe_allow_html=True)
 
-    with st.expander("⚙️ Engine & Panel Settings", expanded=True):
-        st.markdown("##### AI Data Engine")
-        ticker = st.text_input("Aktivní Symbol:", value="EURUSD=X", help="Zadejte symbol z Yahoo Finance (např. EURUSD=X).")
-        
-        # Link sidebar tf to session state
-        tf_options = ["1m", "5m", "15m", "30m", "1h", "1d", "1wk", "1mo"]
-        current_tf_idx = tf_options.index(st.session_state.tf_interval) if st.session_state.tf_interval in tf_options else 5
-        
-        selected_interval = st.selectbox("Interval:", tf_options, index=current_tf_idx)
-        if selected_interval != st.session_state.tf_interval:
-            st.session_state.tf_interval = selected_interval
-            # Auto-adjust period based on interval limits
-            if selected_interval == "1m": st.session_state.tf_period = "7d"
-            elif selected_interval in ["5m", "15m", "30m"]: st.session_state.tf_period = "60d"
-            elif selected_interval == "1h": st.session_state.tf_period = "2y"
-            elif selected_interval == "1mo": st.session_state.tf_period = "max"
-            else: st.session_state.tf_period = "5y"
-            st.rerun()
+    # --- Sidebar Navigation ---
+    st.markdown("### 🧭 Navigace")
+    if st.button("📊 Dashboard", use_container_width=True, type="primary" if st.session_state.current_page == "Dashboard" else "secondary"):
+        st.session_state.current_page = "Dashboard"
+        st.rerun()
+    if st.button("⚙️ Nastavení", use_container_width=True, type="primary" if st.session_state.current_page == "Settings" else "secondary"):
+        st.session_state.current_page = "Settings"
+        st.rerun()
+    
+    st.divider()
 
-        # api_key and ai_provider are handled at the top of the script
-        pass
-
-        # If key is missing from secrets, allow manual input (hidden by default)
-        if not api_key:
-            api_key = st.text_input("Vložte API Key:", type="password", help="Vložte svůj Gemini nebo OpenAI API klíč.")
-            ai_provider = st.radio("Provider:", ["Gemini", "OpenAI"], horizontal=True)
-
-        st.divider()
-        st.markdown("##### Mini-Widget Symbols")
-        dxm_ticker = st.text_input("DXM Symbol:", value=ticker)
-        cot_ticker = st.text_input("COT Symbol:", value=ticker)
-        
-    with st.expander("📈 Visual Settings", expanded=False):
-        chart_type = st.radio("Cenový vývoj:", ["Svíčkový (Candlestick)", "Line Glow (Moderní)"], index=0)
-        col_set1, col_set2 = st.columns(2)
-        with col_set1:
-            show_sma = st.checkbox("SMA", value=False)
-            show_bb = st.checkbox("B. Bands", value=False)
-            show_volume = st.checkbox("Volume", value=False)
-        with col_set2:
-            show_macd = st.checkbox("MACD", value=False)
-            show_rsi = st.checkbox("RSI", value=False)
+    if st.session_state.current_page == "Dashboard":
+        # --- Dashboard specific sidebar tools ---
+        with st.expander("⚙️ Engine & Panel Settings", expanded=True):
+            st.markdown("##### AI Data Engine")
+            ticker = st.text_input("Aktivní Symbol:", value="EURUSD=X", help="Zadejte symbol z Yahoo Finance (např. EURUSD=X).")
             
-        chart_config = {
-            "chart_type": chart_type,
-            "show_sma": show_sma,
-            "show_bb": show_bb,
-            "show_volume": show_volume,
-            "show_macd": show_macd,
-            "show_rsi": show_rsi
-        }
-
-    if st.session_state.analysis_history:
-        with st.expander("📂 Historie Analýz", expanded=False):
-            for i, hist in enumerate(reversed(st.session_state.analysis_history)):
-                hist_label = f"{hist['ticker']} ({hist['tf']}) - {hist['time']}"
-                if st.button(hist_label, key=f"hist_{i}", use_container_width=True):
-                    st.session_state.ai_analysis_data = hist['data']
-                    st.session_state.current_analysis_ticker = f"{hist['ticker']}_{hist['tf']}"
-                    st.session_state.chat_history = hist.get('chat', [])
-                    st.rerun()
-
-    generate_btn = st.button("Spustit Analyzer", type="primary", use_container_width=True)
-
-# 1. Dashboard Header & Health Status
-col_status1, col_status2 = st.columns([0.65, 0.35])
-with col_status1:
-    st.markdown(f"""
-        <div style="display:flex; align-items:baseline; gap: 15px; margin-bottom: 5px;">
-            <h1 style="margin:0; padding:0; line-height: 1; font-size: 2.2rem;">Dashboard</h1>
-            <span style="color:#94A3B8; font-size: 0.9rem;">v3.1 Master</span>
-        </div>
-        <div style="display:flex; gap: 15px; margin-bottom: 20px;">
-            <span style="color:#10B981; font-size:0.75rem;"><span class="pulse-dot"></span> System Online</span>
-            <span style="color:#38BDF8; font-size:0.75rem;">● Data Feed: OK</span>
-            <span style="color:{'#10B981' if api_key else '#EF4444'}; font-size:0.75rem;">● AI Engine: {'Online' if api_key else 'Missing Key'}</span>
-        </div>
-    """, unsafe_allow_html=True)
-
-with col_status2:
-    # Dynamický výpočet časů (NYC, LON, TOK)
-    utc_now = datetime.now(pytz.utc)
-    ny_time = utc_now.astimezone(pytz.timezone('America/New_York')).strftime('%H:%M')
-    lon_time = utc_now.astimezone(pytz.timezone('Europe/London')).strftime('%H:%M')
-    tok_time = utc_now.astimezone(pytz.timezone('Asia/Tokyo')).strftime('%H:%M')
-    
-    st.markdown(f"""
-        <div style="text-align: right; margin-top: 10px; display: flex; justify-content: flex-end; gap: 8px;">
-            <div class="time-badge">NYC <b>{ny_time}</b></div>
-            <div class="time-badge">LON <b>{lon_time}</b></div>
-            <div class="time-badge">TOK <b>{tok_time}</b></div>
-        </div>
-    """, unsafe_allow_html=True)
-
-# 2. Main Grid Layout Data Fetch
-if ticker:
-    # Unify timeframe from session state
-    c_period = st.session_state.tf_period
-    c_interval = st.session_state.tf_interval
-    
-    df_raw = fetch_data(ticker, c_period, c_interval)
-    if df_raw.empty:
-        st.error(f"Nelze načíst data pro ticker '{ticker}' (Period: {c_period}, Interval: {c_interval}).")
-    else:
-        df_processed = calculate_indicators(df_raw)
-        
-        # --- Top KPI Row ---
-        kpi_col1, kpi_col2, kpi_col3 = st.columns([1, 1, 1], gap="medium")
-
-        with kpi_col1:
-            with st.container(border=True):
-                current_price = float(df_processed['Close'].iloc[-1])
-                prev_price = float(df_processed['Close'].iloc[-2]) if len(df_processed) > 1 else current_price
-                price_change = float(current_price - prev_price)
-                pct_change = (price_change / prev_price) * 100 if prev_price != 0 else 0
-                
-                color = "#10B981" if price_change >= 0 else "#EF4444"
-                arrow = "▲" if price_change >= 0 else "▼"
-                
-                # Adaptive rounding based on price magnitude
-                if current_price >= 1:
-                    price_fmt = f"${float(current_price):,.2f}"
-                    change_fmt = f"${abs(price_change):.2f}"
-                elif current_price >= 0.01:
-                    price_fmt = f"${float(current_price):,.4f}"
-                    change_fmt = f"${abs(price_change):.4f}"
-                else:
-                    price_fmt = f"${current_price:,.6f}"
-                    change_fmt = f"${abs(price_change):.6f}"
-
-                st.markdown(f"""
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 10px;">
-                    <h3 style='margin:0; font-size: 1.2rem;'>Asset Price</h3>
-                    <div style="font-size: 0.8rem; color:#94A3B8;">{ticker}</div>
-                </div>
-                <div style="padding: 6px 0;">
-                    <div style="font-size: 2.2rem; font-weight: 700; color: #F8FAFC; line-height: 1.1;">
-                        {price_fmt}
-                    </div>
-                    <div style="font-size: 1.0rem; color: {color}; font-weight: 600; margin-top: 5px;">
-                        {arrow} {change_fmt} ({abs(pct_change):.2f}%)
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-
-        with kpi_col2:
-            # --- DXM WIDGET ---
-            with st.container(border=True):
-                st.markdown(f"""
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 5px;">
-                    <h3 style='margin:0; font-size: 1.2rem;'>DXM</h3>
-                    <div style="font-size: 0.8rem;"><span style="color:#EF4444;">🔴 Short</span> &nbsp;&nbsp; <span style="color:#10B981;">🟢 Long</span></div>
-                </div>
-                """, unsafe_allow_html=True)
-                
-                if dxm_ticker != ticker:
-                    df_dxm = calculate_indicators(fetch_data(dxm_ticker, "1mo"))
-                else:
-                    df_dxm = df_processed
-                
-                if not df_dxm.empty and 'DI_Plus' in df_dxm.columns:
-                    fig_dxm = plot_dxm_chart(df_dxm)
-                    fig_dxm.update_layout(height=110, margin=dict(l=0, r=0, t=0, b=0))
-                    st.plotly_chart(fig_dxm, use_container_width=True, config={'displayModeBar': False})
-                else:
-                    st.warning("Data pro DXM nejsou k dispozici.")
-
-        with kpi_col3:
-            # --- COT WIDGET ---
-            with st.container(border=True):
-                if cot_ticker != ticker:
-                    df_cot_base = calculate_indicators(fetch_data(cot_ticker, "1mo"))
-                else:
-                    df_cot_base = df_processed
-                
-                if not df_cot_base.empty:
-                    synth_long_pct, synth_short_pct = calculate_synthetic_sentiment(df_cot_base)
-                    
-                    st.markdown(f"""
-                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 0px;">
-                        <h3 style='margin:0; font-size: 1.2rem;'>COT</h3>
-                        <div style="font-size: 0.8rem;">
-                            <span style="color:#10B981;">🟢 {synth_long_pct}%</span> &nbsp;&nbsp;
-                            <span style="color:#EF4444;">🔴 {synth_short_pct}%</span>
-                        </div>
-                    </div>
-                    """, unsafe_allow_html=True)
-                    
-                    fig_cot = plot_cot_gauge("COT", synth_long_pct, synth_short_pct)
-                    fig_cot.update_layout(height=115, margin=dict(l=0, r=0, t=0, b=0))
-                    st.plotly_chart(fig_cot, use_container_width=True, config={'displayModeBar': False})
-                else:
-                    st.warning("Data pro COT nejsou k dispozici.")
-
-        # --- Main Chart Section ---
-        st.markdown("<br>", unsafe_allow_html=True)
-        
-        # TradingView-Style Timeframe Toolbar
-        tftimeframes = ["1m", "5m", "15m", "30m", "1h", "1d", "1wk", "1mo"]
-        cols_tf = st.columns(len(tftimeframes))
-        for i, tf in enumerate(tftimeframes):
-            is_active = st.session_state.tf_interval == tf
-            btn_label = f"**{tf}**" if is_active else tf
-            if cols_tf[i].button(btn_label, key=f"tf_btn_{tf}", use_container_width=True):
-                st.session_state.tf_interval = tf
-                if tf == "1m": st.session_state.tf_period = "7d"
-                elif tf in ["5m", "15m", "30m"]: st.session_state.tf_period = "60d"
-                elif tf == "1h": st.session_state.tf_period = "2y"
-                else: st.session_state.tf_period = "1y"
+            # Link sidebar tf to session state
+            tf_options = ["1m", "5m", "15m", "30m", "1h", "1d", "1wk", "1mo"]
+            current_tf_idx = tf_options.index(st.session_state.tf_interval) if st.session_state.tf_interval in tf_options else 5
+            
+            selected_interval = st.selectbox("Interval:", tf_options, index=current_tf_idx)
+            if selected_interval != st.session_state.tf_interval:
+                st.session_state.tf_interval = selected_interval
+                if selected_interval == "1m": st.session_state.tf_period = "7d"
+                elif selected_interval in ["5m", "15m", "30m"]: st.session_state.tf_period = "60d"
+                elif selected_interval == "1h": st.session_state.tf_period = "2y"
+                elif selected_interval == "1mo": st.session_state.tf_period = "max"
+                else: st.session_state.tf_period = "5y"
                 st.rerun()
 
-        # Chart Display
-        fig = plot_chart(df_processed, ticker, chart_config)
-        with st.container(border=True):
-            st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+            st.divider()
+            st.markdown("##### Mini-Widget Symbols")
+            dxm_ticker = st.text_input("DXM Symbol:", value=st.session_state.dxm_symbol)
+            cot_ticker = st.text_input("COT Symbol:", value=st.session_state.cot_symbol)
+            
+        with st.expander("📈 Visual Settings", expanded=False):
+            chart_type = st.radio("Cenový vývoj:", ["Svíčkový (Candlestick)", "Line Glow (Moderní)"], index=0)
+            col_set1, col_set2 = st.columns(2)
+            with col_set1:
+                show_sma = st.checkbox("SMA", value=False)
+                show_bb = st.checkbox("B. Bands", value=False)
+                show_volume = st.checkbox("Volume", value=False)
+            with col_set2:
+                show_macd = st.checkbox("MACD", value=False)
+                show_rsi = st.checkbox("RSI", value=False)
+            
+            chart_config = {
+                "chart_type": chart_type,
+                "show_sma": show_sma,
+                "show_bb": show_bb,
+                "show_volume": show_volume,
+                "show_macd": show_macd,
+                "show_rsi": show_rsi
+            }
 
-        # --- Technical Health Check Panel ---
-        tech_signals = get_technical_signals(df_processed)
-        if tech_signals:
-            st.markdown("<div style='margin-top: 25px;'></div>", unsafe_allow_html=True)
-            t_cols = st.columns(4)
-            for i, (name, data) in enumerate(tech_signals.items()):
-                with t_cols[i]:
-                    st.markdown(f"""
-                        <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); padding: 12px; border-radius: 10px; text-align: center;">
-                            <div style="font-size: 0.7rem; color: #94A3B8; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px;">{name}</div>
-                            <div style="font-size: 1rem; font-weight: 700; color: {data['color']};">{data['val']}</div>
-                            <div style="font-size: 0.65rem; color: #475569; margin-top: 2px;">{data['status']}</div>
-                        </div>
-                    """, unsafe_allow_html=True)
+        if st.session_state.analysis_history:
+            with st.expander("📂 Historie Analýz", expanded=False):
+                for i, hist in enumerate(reversed(st.session_state.analysis_history)):
+                    if st.button(f"{hist['ticker']} ({hist['tf']}) - {hist['time']}", key=f"hist_{i}", use_container_width=True):
+                        st.session_state.ai_analysis_data = hist['data']
+                        st.rerun()
 
-        # --- News Feed Section ---
-        news = fetch_news(ticker)
-        if news:
-            st.markdown("<h3 style='font-size: 1.2rem; margin-top: 20px;'>📰 Aktuální tržní zprávy</h3>", unsafe_allow_html=True)
-            news_cols = st.columns(len(news))
-            for i, article in enumerate(news):
-                with news_cols[i]:
-                    with st.container(border=True):
-                        st.markdown(f"""
-                            <div style="font-size: 0.8rem; color: #94A3B8; margin-bottom: 5px;">{article['publisher']}</div>
-                            <div style="font-size: 0.9rem; font-weight: 600; min-height: 45px; margin-bottom: 10px;">
-                                <a href="{article['link']}" target="_blank" style="text-decoration: none; color: #F8FAFC;">{article['title'][:60]}{'...' if len(article['title']) > 60 else ''}</a>
-                            </div>
-                        """, unsafe_allow_html=True)
+        generate_btn = st.button("Spustit Analyzer", type="primary", use_container_width=True)
+    else:
+        st.info("💡 Upravte globální nastavení v hlavní sekci.")
+        generate_btn = False
 
-        # --- AI Generated Trade Ideas Header ---
+# --- Main Area Rendering ---
+if st.session_state.current_page == "Dashboard":
+
+    # 1. Dashboard Header & Health Status
+    col_status1, col_status2 = st.columns([0.65, 0.35])
+    with col_status1:
         st.markdown(f"""
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 20px; margin-top: 30px;">
-                <h2 style="margin:0; font-size: 1.4rem;">AI generated trade ideas</h2>
-                <span style="background: rgba(255,255,255,0.05); padding: 5px 12px; border-radius: 8px; font-weight:600; font-size:0.9rem; color:#00E676;">{ticker} • {st.session_state.tf_interval}</span>
+            <div style="display:flex; align-items:baseline; gap: 15px; margin-bottom: 5px;">
+                <h1 style="margin:0; padding:0; line-height: 1; font-size: 2.2rem;">Dashboard</h1>
+                <span style="color:#94A3B8; font-size: 0.9rem;">v3.1 Master</span>
+            </div>
+            <div style="display:flex; gap: 15px; margin-bottom: 20px;">
+                <span style="color:#10B981; font-size:0.75rem;"><span class="pulse-dot"></span> System Online</span>
+                <span style="color:#38BDF8; font-size:0.75rem;">● Data Feed: OK</span>
+                <span style="color:{'#10B981' if api_key else '#EF4444'}; font-size:0.75rem;">● AI Engine: {'Online' if api_key else 'Missing Key'}</span>
             </div>
         """, unsafe_allow_html=True)
 
-        # Uchování analýzy ve stavu (aby nezmizela při kliknutí na expander)
-        if 'ai_analysis_data' not in st.session_state:
-            st.session_state.ai_analysis_data = None
-        if 'current_analysis_ticker' not in st.session_state:
-            st.session_state.current_analysis_ticker = None
+    with col_status2:
+        # Dynamický výpočet časů (NYC, LON, TOK)
+        utc_now = datetime.now(pytz.utc)
+        ny_time = utc_now.astimezone(pytz.timezone('America/New_York')).strftime('%H:%M')
+        lon_time = utc_now.astimezone(pytz.timezone('Europe/London')).strftime('%H:%M')
+        tok_time = utc_now.astimezone(pytz.timezone('Asia/Tokyo')).strftime('%H:%M')
+    
+        st.markdown(f"""
+            <div style="text-align: right; margin-top: 10px; display: flex; justify-content: flex-end; gap: 8px;">
+                <div class="time-badge">NYC <b>{ny_time}</b></div>
+                <div class="time-badge">LON <b>{lon_time}</b></div>
+                <div class="time-badge">TOK <b>{tok_time}</b></div>
+            </div>
+        """, unsafe_allow_html=True)
 
-        if generate_btn:
-            api_key, ai_provider = get_api_credentials()
-            if not api_key:
-                st.error("Zadejte prosím API klíč do .streamlit/secrets.toml pro spuštění AI analýzy.")
-            else:
-                with st.spinner("Sběr dat a generování posudku..."):
-                    try:
-                        fundamentals = fetch_fundamentals(ticker)
-                        news_context = fetch_news(ticker)
-                        ai_data = generate_analysis(ticker, df_processed, fundamentals, news=news_context)
-                        
-                        if ai_data:
-                            st.session_state.ai_analysis_data = ai_data
-                            st.session_state.current_analysis_ticker = f"{ticker}_{st.session_state.tf_interval}"
-                            st.session_state.chat_history = [] # Reset chat for new analysis
-                            
-                            # Save to History
-                            st.session_state.analysis_history.append({
-                                "ticker": ticker,
-                                "tf": st.session_state.tf_interval,
-                                "time": datetime.now().strftime("%H:%M:%S"),
-                                "data": ai_data,
-                                "chat": []
-                            })
-                            # Limit history to last 10 items
-                            if len(st.session_state.analysis_history) > 10:
-                                st.session_state.analysis_history.pop(0)
-                                
-                    except Exception as e:
-                        st.error(f"Při komunikaci s AI nastala chyba: {e}")
-                        if "401" in str(e):
-                            st.warning("Tip: Kód 401 značí neplatný API klíč. Zkontrolujte ho v Settings.")
+    # 2. Main Grid Layout Data Fetch
+    if ticker:
+        # Unify timeframe from session state
+        c_period = st.session_state.tf_period
+        c_interval = st.session_state.tf_interval
+    
+        df_raw = fetch_data(ticker, c_period, c_interval)
+        if df_raw.empty:
+            st.error(f"Nelze načíst data pro ticker '{ticker}' (Period: {c_period}, Interval: {c_interval}).")
+        else:
+            df_processed = calculate_indicators(df_raw)
+        
+            # --- Top KPI Row ---
+            kpi_col1, kpi_col2, kpi_col3 = st.columns([1, 1, 1], gap="medium")
 
-        # Zobrazení AI dat ze session_state
-        current_context = f"{ticker}_{st.session_state.tf_interval}"
-        if st.session_state.ai_analysis_data and st.session_state.current_analysis_ticker == current_context:
-            ai_data = st.session_state.ai_analysis_data
-            sub_col1, sub_col2 = st.columns([1, 1], gap="medium")
-            
-            with sub_col1:
+            with kpi_col1:
                 with st.container(border=True):
-                    # --- Vizualizace (Gauge Chart) ---
-                    score = ai_data.get("sentiment_score", 0)
-                    label = ai_data.get("sentiment_label", "Neutral")
-                    
-                    fig_gauge = go.Figure(go.Indicator(
-                        mode = "gauge+number",
-                        value = score,
-                        number = {'font': {'size': 85, 'color': 'white'}},
-                        domain = {'x': [0, 1], 'y': [0, 1]},
-                        title = {'text': f"<span style='font-size: 1rem; color: #94A3B8'>Tržní Sentiment</span><br><b style='font-size: 1.5rem; color: {'#10B981' if score > 10 else '#EF4444' if score < -10 else '#F59E0B'}'>{label}</b>"},
-                        gauge = {
-                            'axis': {'range': [-100, 100], 'tickwidth': 0, 'visible': False},
-                            'bar': {'color': "rgba(0,0,0,0)", 'thickness': 0},
-                            'bgcolor': "rgba(255,255,255,0.05)",
-                            'borderwidth': 0,
-                            'steps': [
-                                {'range': [-100, -30], 'color': "#EF4444"},
-                                {'range': [-30, 30], 'color': "#F59E0B"},
-                                {'range': [30, 100], 'color': "#10B981"}],
-                            'threshold': {
-                                'line': {'color': "#FBBF24", 'width': 4},
-                                'thickness': 0.8,
-                                'value': score}
-                        }
-                    ))
-                    fig_gauge.update_layout(
-                        height=220, 
-                        margin=dict(t=60, b=0, l=10, r=10), 
-                        paper_bgcolor="rgba(0,0,0,0)", 
-                        font={'color': "white"}
-                    )
-                    st.plotly_chart(fig_gauge, use_container_width=True, config={'displayModeBar': False})
-
-            with sub_col2:
-                with st.container(border=True):
-                    st.markdown("<h3 style='margin-top:0; margin-bottom:15px; font-size: 1.1rem;'>Score overview</h3>", unsafe_allow_html=True)
-                    
-                    setup = ai_data.get("trade_setup", {})
-                    direction = setup.get("direction", "N/A")
-                    if direction is None:
-                        direction = "N/A"
-                        
-                    dir_class = "glow-long" if "Long" in direction else "glow-short" if "Short" in direction else ""
-                    dot_class = "pulse-dot" if "Long" in direction else "pulse-dot short" if "Short" in direction else "pulse-dot"
+                    current_price = float(df_processed['Close'].iloc[-1])
+                    prev_price = float(df_processed['Close'].iloc[-2]) if len(df_processed) > 1 else current_price
+                    price_change = float(current_price - prev_price)
+                    pct_change = (price_change / prev_price) * 100 if prev_price != 0 else 0
+                
+                    color = "#10B981" if price_change >= 0 else "#EF4444"
+                    arrow = "▲" if price_change >= 0 else "▼"
+                
+                    # Adaptive rounding based on price magnitude
+                    if current_price >= 1:
+                        price_fmt = f"${float(current_price):,.2f}"
+                        change_fmt = f"${abs(price_change):.2f}"
+                    elif current_price >= 0.01:
+                        price_fmt = f"${float(current_price):,.4f}"
+                        change_fmt = f"${abs(price_change):.4f}"
+                    else:
+                        price_fmt = f"${current_price:,.6f}"
+                        change_fmt = f"${abs(price_change):.6f}"
 
                     st.markdown(f"""
-                    <div style="display:flex; justify-content:space-between; padding: 10px 0; border-bottom: 1px solid #1E2129;">
-                        <span style="color:#94A3B8; font-size:0.9rem;">Direction Bias</span>
-                        <span class="{dir_class}" style="font-weight:600;"><span class="{dot_class}"></span>{direction}</span>
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 10px;">
+                        <h3 style='margin:0; font-size: 1.2rem;'>Asset Price</h3>
+                        <div style="font-size: 0.8rem; color:#94A3B8;">{ticker}</div>
                     </div>
-                    <div style="display:flex; justify-content:space-between; padding: 10px 0; border-bottom: 1px solid #1E2129;">
-                        <span style="color:#94A3B8; font-size:0.9rem;">Entry Point</span>
-                        <span style="font-weight:600;">{setup.get("entry", "N/A")}</span>
-                    </div>
-                    <div style="display:flex; justify-content:space-between; padding: 10px 0; border-bottom: 1px solid #1E2129;">
-                        <span style="color:#94A3B8; font-size:0.9rem;">Take Profit</span>
-                        <span style="color:#00E676; font-weight:600;">{setup.get("tp", "N/A")}</span>
-                    </div>
-                    <div style="display:flex; justify-content:space-between; padding: 10px 0;">
-                        <span style="color:#94A3B8; font-size:0.9rem;">Stop Loss</span>
-                        <span style="color:#F87171; font-weight:600;">{setup.get("sl", "N/A")}</span>
+                    <div style="padding: 6px 0;">
+                        <div style="font-size: 2.2rem; font-weight: 700; color: #F8FAFC; line-height: 1.1;">
+                            {price_fmt}
+                        </div>
+                        <div style="font-size: 1.0rem; color: {color}; font-weight: 600; margin-top: 5px;">
+                            {arrow} {change_fmt} ({abs(pct_change):.2f}%)
+                        </div>
                     </div>
                     """, unsafe_allow_html=True)
 
-            st.markdown("<br>", unsafe_allow_html=True)
-            
-            # --- Detailní Rozbor (Expandery) ---
-            with st.expander("📊 Detailní Technická Analýza"):
-                st.write(ai_data.get("technical_analysis", "Data nenalezena."))
-            
-            with st.expander("🏢 Detailní Fundamentální Analýza"):
-                st.write(ai_data.get("fundamental_analysis", "Data nenalezena."))
+            with kpi_col2:
+                # --- DXM WIDGET ---
+                with st.container(border=True):
+                    st.markdown(f"""
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 5px;">
+                        <h3 style='margin:0; font-size: 1.2rem;'>DXM</h3>
+                        <div style="font-size: 0.8rem;"><span style="color:#EF4444;">🔴 Short</span> &nbsp;&nbsp; <span style="color:#10B981;">🟢 Long</span></div>
+                    </div>
+                    """, unsafe_allow_html=True)
                 
-            with st.expander("⚖️ Syntéza a Rigorózní Obhajoba"):
-                st.write(ai_data.get("synthesis_and_defense", "Data nenalezena."))
-            
-            if setup and setup.get("rationale"):
-                st.markdown(f"""
-                <div style="background: rgba(56, 189, 248, 0.1); border-left: 4px solid #38BDF8; padding: 16px; border-radius: 8px; margin-bottom: 25px;">
-                    <span style="color: #38BDF8; font-weight: 700; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 1px;">🧠 Logika setupu</span><br>
-                    <div style="color: #E2E8F0; font-size: 0.95rem; margin-top: 8px; line-height: 1.5;">{setup.get('rationale')}</div>
+                    if dxm_ticker != ticker:
+                        df_dxm = calculate_indicators(fetch_data(dxm_ticker, "1mo"))
+                    else:
+                        df_dxm = df_processed
+                
+                    if not df_dxm.empty and 'DI_Plus' in df_dxm.columns:
+                        fig_dxm = plot_dxm_chart(df_dxm)
+                        fig_dxm.update_layout(height=110, margin=dict(l=0, r=0, t=0, b=0))
+                        st.plotly_chart(fig_dxm, use_container_width=True, config={'displayModeBar': False})
+                    else:
+                        st.warning("Data pro DXM nejsou k dispozici.")
+
+            with kpi_col3:
+                # --- COT WIDGET ---
+                with st.container(border=True):
+                    if cot_ticker != ticker:
+                        df_cot_base = calculate_indicators(fetch_data(cot_ticker, "1mo"))
+                    else:
+                        df_cot_base = df_processed
+                
+                    if not df_cot_base.empty:
+                        synth_long_pct, synth_short_pct = calculate_synthetic_sentiment(df_cot_base)
+                    
+                        st.markdown(f"""
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 0px;">
+                            <h3 style='margin:0; font-size: 1.2rem;'>COT</h3>
+                            <div style="font-size: 0.8rem;">
+                                <span style="color:#10B981;">🟢 {synth_long_pct}%</span> &nbsp;&nbsp;
+                                <span style="color:#EF4444;">🔴 {synth_short_pct}%</span>
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    
+                        fig_cot = plot_cot_gauge("COT", synth_long_pct, synth_short_pct)
+                        fig_cot.update_layout(height=115, margin=dict(l=0, r=0, t=0, b=0))
+                        st.plotly_chart(fig_cot, use_container_width=True, config={'displayModeBar': False})
+                    else:
+                        st.warning("Data pro COT nejsou k dispozici.")
+
+            # --- Main Chart Section ---
+            st.markdown("<br>", unsafe_allow_html=True)
+        
+            # TradingView-Style Timeframe Toolbar
+            tftimeframes = ["1m", "5m", "15m", "30m", "1h", "1d", "1wk", "1mo"]
+            cols_tf = st.columns(len(tftimeframes))
+            for i, tf in enumerate(tftimeframes):
+                is_active = st.session_state.tf_interval == tf
+                btn_label = f"**{tf}**" if is_active else tf
+                if cols_tf[i].button(btn_label, key=f"tf_btn_{tf}", use_container_width=True):
+                    st.session_state.tf_interval = tf
+                    if tf == "1m": st.session_state.tf_period = "7d"
+                    elif tf in ["5m", "15m", "30m"]: st.session_state.tf_period = "60d"
+                    elif tf == "1h": st.session_state.tf_period = "2y"
+                    else: st.session_state.tf_period = "1y"
+                    st.rerun()
+
+            # Chart Display
+            fig = plot_chart(df_processed, ticker, chart_config)
+            with st.container(border=True):
+                st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+
+            # --- Technical Health Check Panel ---
+            tech_signals = get_technical_signals(df_processed)
+            if tech_signals:
+                st.markdown("<div style='margin-top: 25px;'></div>", unsafe_allow_html=True)
+                t_cols = st.columns(4)
+                for i, (name, data) in enumerate(tech_signals.items()):
+                    with t_cols[i]:
+                        st.markdown(f"""
+                            <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); padding: 12px; border-radius: 10px; text-align: center;">
+                                <div style="font-size: 0.7rem; color: #94A3B8; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px;">{name}</div>
+                                <div style="font-size: 1rem; font-weight: 700; color: {data['color']};">{data['val']}</div>
+                                <div style="font-size: 0.65rem; color: #475569; margin-top: 2px;">{data['status']}</div>
+                            </div>
+                        """, unsafe_allow_html=True)
+
+            # --- News Feed Section ---
+            news = fetch_news(ticker)
+            if news:
+                st.markdown("<h3 style='font-size: 1.2rem; margin-top: 20px;'>📰 Aktuální tržní zprávy</h3>", unsafe_allow_html=True)
+                news_cols = st.columns(len(news))
+                for i, article in enumerate(news):
+                    with news_cols[i]:
+                        with st.container(border=True):
+                            st.markdown(f"""
+                                <div style="font-size: 0.8rem; color: #94A3B8; margin-bottom: 5px;">{article['publisher']}</div>
+                                <div style="font-size: 0.9rem; font-weight: 600; min-height: 45px; margin-bottom: 10px;">
+                                    <a href="{article['link']}" target="_blank" style="text-decoration: none; color: #F8FAFC;">{article['title'][:60]}{'...' if len(article['title']) > 60 else ''}</a>
+                                </div>
+                            """, unsafe_allow_html=True)
+
+            # --- AI Generated Trade Ideas Header ---
+            st.markdown(f"""
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 20px; margin-top: 30px;">
+                    <h2 style="margin:0; font-size: 1.4rem;">AI generated trade ideas</h2>
+                    <span style="background: rgba(255,255,255,0.05); padding: 5px 12px; border-radius: 8px; font-weight:600; font-size:0.9rem; color:#00E676;">{ticker} • {st.session_state.tf_interval}</span>
                 </div>
-                """, unsafe_allow_html=True)
+            """, unsafe_allow_html=True)
 
-            # --- Rychlý Export Section ---
-            with st.expander("📤 Rychlý Export Setupu (Copy-Paste)"):
-                export_text = f"""
-🚀 TRADING SETUP: {ticker} ({st.session_state.tf_interval})
----
-🧭 Směr: {direction}
-🎯 Entry: {setup.get('entry', 'N/A')}
-✅ Take Profit: {setup.get('tp', 'N/A')}
-❌ Stop Loss: {setup.get('sl', 'N/A')}
----
-🧠 Ratio: {setup.get('rationale', 'N/A')}
-                """
-                st.code(export_text.strip(), language="text")
+            # Uchování analýzy ve stavu (aby nezmizela při kliknutí na expander)
+            if 'ai_analysis_data' not in st.session_state:
+                st.session_state.ai_analysis_data = None
+            if 'current_analysis_ticker' not in st.session_state:
+                st.session_state.current_analysis_ticker = None
 
+            if generate_btn:
+                api_key, ai_provider = get_api_credentials()
+                if not api_key:
+                    st.error("Zadejte prosím API klíč do .streamlit/secrets.toml pro spuštění AI analýzy.")
+                else:
+                    with st.spinner("Sběr dat a generování posudku..."):
+                        try:
+                            fundamentals = fetch_fundamentals(ticker)
+                            news_context = fetch_news(ticker)
+                            ai_data = generate_analysis(ticker, df_processed, fundamentals, news=news_context)
+                        
+                            if ai_data:
+                                st.session_state.ai_analysis_data = ai_data
+                                st.session_state.current_analysis_ticker = f"{ticker}_{st.session_state.tf_interval}"
+                                st.session_state.chat_history = [] # Reset chat for new analysis
+                            
+                                # Save to History
+                                st.session_state.analysis_history.append({
+                                    "ticker": ticker,
+                                    "tf": st.session_state.tf_interval,
+                                    "time": datetime.now().strftime("%H:%M:%S"),
+                                    "data": ai_data,
+                                    "chat": []
+                                })
+                                # Limit history to last 10 items
+                                if len(st.session_state.analysis_history) > 10:
+                                    st.session_state.analysis_history.pop(0)
+                                
+                        except Exception as e:
+                            st.error(f"Při komunikaci s AI nastala chyba: {e}")
+                            if "401" in str(e):
+                                st.warning("Tip: Kód 401 značí neplatný API klíč. Zkontrolujte ho v Settings.")
+
+            # Zobrazení AI dat ze session_state
+            current_context = f"{ticker}_{st.session_state.tf_interval}"
+            if st.session_state.ai_analysis_data and st.session_state.current_analysis_ticker == current_context:
+                ai_data = st.session_state.ai_analysis_data
+                sub_col1, sub_col2 = st.columns([1, 1], gap="medium")
+            
+                with sub_col1:
+                    with st.container(border=True):
+                        # --- Vizualizace (Gauge Chart) ---
+                        score = ai_data.get("sentiment_score", 0)
+                        label = ai_data.get("sentiment_label", "Neutral")
+                    
+                        fig_gauge = go.Figure(go.Indicator(
+                            mode = "gauge+number",
+                            value = score,
+                            number = {'font': {'size': 85, 'color': 'white'}},
+                            domain = {'x': [0, 1], 'y': [0, 1]},
+                            title = {'text': f"<span style='font-size: 1rem; color: #94A3B8'>Tržní Sentiment</span><br><b style='font-size: 1.5rem; color: {'#10B981' if score > 10 else '#EF4444' if score < -10 else '#F59E0B'}'>{label}</b>"},
+                            gauge = {
+                                'axis': {'range': [-100, 100], 'tickwidth': 0, 'visible': False},
+                                'bar': {'color': "rgba(0,0,0,0)", 'thickness': 0},
+                                'bgcolor': "rgba(255,255,255,0.05)",
+                                'borderwidth': 0,
+                                'steps': [
+                                    {'range': [-100, -30], 'color': "#EF4444"},
+                                    {'range': [-30, 30], 'color': "#F59E0B"},
+                                    {'range': [30, 100], 'color': "#10B981"}],
+                                'threshold': {
+                                    'line': {'color': "#FBBF24", 'width': 4},
+                                    'thickness': 0.8,
+                                    'value': score}
+                            }
+                        ))
+                        fig_gauge.update_layout(
+                            height=220, 
+                            margin=dict(t=60, b=0, l=10, r=10), 
+                            paper_bgcolor="rgba(0,0,0,0)", 
+                            font={'color': "white"}
+                        )
+                        st.plotly_chart(fig_gauge, use_container_width=True, config={'displayModeBar': False})
+
+                with sub_col2:
+                    with st.container(border=True):
+                        st.markdown("<h3 style='margin-top:0; margin-bottom:15px; font-size: 1.1rem;'>Score overview</h3>", unsafe_allow_html=True)
+                    
+                        setup = ai_data.get("trade_setup", {})
+                        direction = setup.get("direction", "N/A")
+                        if direction is None:
+                            direction = "N/A"
+                        
+                        dir_class = "glow-long" if "Long" in direction else "glow-short" if "Short" in direction else ""
+                        dot_class = "pulse-dot" if "Long" in direction else "pulse-dot short" if "Short" in direction else "pulse-dot"
+
+                        st.markdown(f"""
+                        <div style="display:flex; justify-content:space-between; padding: 10px 0; border-bottom: 1px solid #1E2129;">
+                            <span style="color:#94A3B8; font-size:0.9rem;">Direction Bias</span>
+                            <span class="{dir_class}" style="font-weight:600;"><span class="{dot_class}"></span>{direction}</span>
+                        </div>
+                        <div style="display:flex; justify-content:space-between; padding: 10px 0; border-bottom: 1px solid #1E2129;">
+                            <span style="color:#94A3B8; font-size:0.9rem;">Entry Point</span>
+                            <span style="font-weight:600;">{setup.get("entry", "N/A")}</span>
+                        </div>
+                        <div style="display:flex; justify-content:space-between; padding: 10px 0; border-bottom: 1px solid #1E2129;">
+                            <span style="color:#94A3B8; font-size:0.9rem;">Take Profit</span>
+                            <span style="color:#00E676; font-weight:600;">{setup.get("tp", "N/A")}</span>
+                        </div>
+                        <div style="display:flex; justify-content:space-between; padding: 10px 0;">
+                            <span style="color:#94A3B8; font-size:0.9rem;">Stop Loss</span>
+                            <span style="color:#F87171; font-weight:600;">{setup.get("sl", "N/A")}</span>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                st.markdown("<br>", unsafe_allow_html=True)
+            
+                # --- Detailní Rozbor (Expandery) ---
+                with st.expander("📊 Detailní Technická Analýza"):
+                    st.write(ai_data.get("technical_analysis", "Data nenalezena."))
+            
+                with st.expander("🏢 Detailní Fundamentální Analýza"):
+                    st.write(ai_data.get("fundamental_analysis", "Data nenalezena."))
+                
+                with st.expander("⚖️ Syntéza a Rigorózní Obhajoba"):
+                    st.write(ai_data.get("synthesis_and_defense", "Data nenalezena."))
+            
+                if setup and setup.get("rationale"):
+                    st.markdown(f"""
+                    <div style="background: rgba(56, 189, 248, 0.1); border-left: 4px solid #38BDF8; padding: 16px; border-radius: 8px; margin-bottom: 25px;">
+                        <span style="color: #38BDF8; font-weight: 700; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 1px;">🧠 Logika setupu</span><br>
+                        <div style="color: #E2E8F0; font-size: 0.95rem; margin-top: 8px; line-height: 1.5;">{setup.get('rationale')}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                # --- Rychlý Export Section ---
+                with st.expander("📤 Rychlý Export Setupu (Copy-Paste)"):
+                    export_text = f"""
+    🚀 TRADING SETUP: {ticker} ({st.session_state.tf_interval})
+    ---
+    🧭 Směr: {direction}
+    🎯 Entry: {setup.get('entry', 'N/A')}
+    ✅ Take Profit: {setup.get('tp', 'N/A')}
+    ❌ Stop Loss: {setup.get('sl', 'N/A')}
+    ---
+    🧠 Ratio: {setup.get('rationale', 'N/A')}
+                    """
+                    st.code(export_text.strip(), language="text")
+
+
+else:
+    # --- Settings Page Content ---
+    st.markdown("## ⚙️ Globální Nastavení Terminálu")
+    st.markdown("---")
+    
+    set_col1, set_col2 = st.columns(2)
+    
+    with set_col1:
+        with st.container(border=True):
+            st.markdown("### 🌐 Watchlist & Symboly")
+            current_watchlist_str = ", ".join(st.session_state.watchlist)
+            new_watchlist_str = st.text_area("Sledované symboly (oddělené čárkou):", value=current_watchlist_str)
+            
+            st.divider()
+            new_dxm = st.text_input("Symbol pro DXM Widget:", value=st.session_state.dxm_symbol)
+            new_cot = st.text_input("Symbol pro COT Widget:", value=st.session_state.cot_symbol)
+            
+            if st.button("💾 Uložit Symboly", type="primary", use_container_width=True):
+                st.session_state.watchlist = [s.strip() for s in new_watchlist_str.split(",") if s.strip()]
+                st.session_state.dxm_symbol = new_dxm
+                st.session_state.cot_symbol = new_cot
+                st.success("Symboly byly úspěšně aktualizovány!")
+                st.rerun()
+
+    with set_col2:
+        with st.container(border=True):
+            st.markdown("### 🧠 AI Engine & API")
+            st.info("Zde můžete ručně přepsat API klíče pro tuto relaci.")
+            manual_key = st.text_input("Vlastní API Key:", type="password")
+            manual_provider = st.radio("Vyberte poskytovatele:", ["Gemini", "OpenAI"], horizontal=True)
+            
+        with st.container(border=True):
+            st.markdown("### 🛠️ Systémové Nástroje")
+            if st.button("🧹 Vymazat Cache", use_container_width=True):
+                st.cache_data.clear()
+                st.success("Cache vymazána!")
+            
+            if st.button("🗑️ Resetovat Historii", use_container_width=True):
+                st.session_state.analysis_history = []
+                st.success("Historie byla vymazána.")
+                st.rerun()
+
+    st.markdown("<br><br>", unsafe_allow_html=True)
+    st.info("💡 Změny provedené zde se projeví na Dashboardu ihned po návratu.")
