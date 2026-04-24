@@ -879,8 +879,6 @@ with st.sidebar:
                 </div>
             </div>
         </div>
-        <div class="sidebar-menu-item active">📊 Dashboard</div>
-        <div class="sidebar-menu-item" style="color: #475569;">⚙️ Settings</div>
         <br>
     """, unsafe_allow_html=True)
 
@@ -904,12 +902,15 @@ with st.sidebar:
     
     st.divider()
 
+    # --- Global Sidebar Inputs (Always Defined) ---
+    with st.expander("⚙️ Konfigurace Symbolů", expanded=st.session_state.current_page == "Dashboard"):
+        ticker = st.text_input("Aktivní Symbol:", value="EURUSD=X", help="Zadejte symbol z Yahoo Finance (např. EURUSD=X).")
+        dxm_ticker = st.text_input("DXM Symbol:", value=st.session_state.dxm_symbol)
+        cot_ticker = st.text_input("COT Symbol:", value=st.session_state.cot_symbol)
+
     if st.session_state.current_page == "Dashboard":
         # --- Dashboard specific sidebar tools ---
-        with st.expander("⚙️ Engine & Panel Settings", expanded=True):
-            st.markdown("##### AI Data Engine")
-            ticker = st.text_input("Aktivní Symbol:", value="EURUSD=X", help="Zadejte symbol z Yahoo Finance (např. EURUSD=X).")
-            
+        with st.expander("🕒 Timeframe & Engine", expanded=True):
             # Link sidebar tf to session state
             tf_options = ["1m", "5m", "15m", "30m", "1h", "1d", "1wk", "1mo"]
             current_tf_idx = tf_options.index(st.session_state.tf_interval) if st.session_state.tf_interval in tf_options else 5
@@ -923,11 +924,6 @@ with st.sidebar:
                 elif selected_interval == "1mo": st.session_state.tf_period = "max"
                 else: st.session_state.tf_period = "5y"
                 st.rerun()
-
-            st.divider()
-            st.markdown("##### Mini-Widget Symbols")
-            dxm_ticker = st.text_input("DXM Symbol:", value=st.session_state.dxm_symbol)
-            cot_ticker = st.text_input("COT Symbol:", value=st.session_state.cot_symbol)
             
         with st.expander("📈 Visual Settings", expanded=False):
             chart_type = st.radio("Cenový vývoj:", ["Svíčkový (Candlestick)", "Line Glow (Moderní)"], index=0)
