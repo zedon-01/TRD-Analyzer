@@ -840,6 +840,11 @@ Požaduji, abys vygeneroval detailní odpověď jako validní JSON objekt bez Ma
                     return json.loads(response.text)
                 except Exception as e:
                     last_err = f"{type(e).__name__}: {str(e)}"
+                    if st.session_state.get("debug_mode", False):
+                        st.error(f"DEBUG - Model {model_name} selhal: {last_err}")
+                        import traceback
+                        st.code(traceback.format_exc())
+                        
                     if "429" in str(e):
                         st.warning("⚠️ Dosáhli jste denního limitu (Quota 429) u Google Gemini. Zkuste to prosím později nebo použijte klíč z nového projektu.")
                         break 
@@ -1325,6 +1330,10 @@ else:
             st.text_input("Vlastní API Key:", type="password", key="manual_api_key", help="Vložte klíč z Google AI Studio nebo OpenAI.")
             st.radio("Vyberte poskytovatele:", ["Gemini", "OpenAI"], key="manual_api_provider", horizontal=True)
             
+            # Debug Mode Toggle
+            st.checkbox("Ladící režim (Debug Mode)", key="debug_mode", help="Zobrazí detailní technické chyby pro diagnostiku.")
+            
+            st.divider()
             if st.button("🔍 Otestovat připojení", use_container_width=True):
                 test_key, test_provider = get_api_credentials()
                 if not test_key or not test_key.strip():
