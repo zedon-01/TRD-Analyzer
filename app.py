@@ -13,7 +13,15 @@ import pytz # Potřebné pro korektní časová pásma
 
 # --- API Key Detection (Global Scope) ---
 def get_api_credentials():
-    """Dynamically fetch API keys from secrets to avoid caching issues."""
+    """Dynamically fetch API keys, prioritizing manual session overrides over secrets."""
+    # Check session state overrides first
+    manual_key = st.session_state.get("manual_api_key")
+    manual_provider = st.session_state.get("manual_api_provider")
+    
+    if manual_key:
+        return manual_key, manual_provider
+        
+    # Fallback to secrets
     gemini_key = st.secrets.get("GEMINI_API_KEY")
     openai_key = st.secrets.get("OPENAI_API_KEY")
     
@@ -46,6 +54,10 @@ if 'ai_analysis_data' not in st.session_state:
     st.session_state.ai_analysis_data = None
 if 'analysis_history' not in st.session_state:
     st.session_state.analysis_history = []
+if 'manual_api_key' not in st.session_state:
+    st.session_state.manual_api_key = ""
+if 'manual_api_provider' not in st.session_state:
+    st.session_state.manual_api_provider = "Gemini"
 
 # No base64 needed, pure CSS logo used.
 
@@ -1315,8 +1327,14 @@ else:
         with st.container(border=True):
             st.markdown("### 🧠 AI Engine & API")
             st.info("Zde můžete ručně přepsat API klíče pro tuto relaci.")
-            manual_key = st.text_input("Vlastní API Key:", type="password")
-            manual_provider = st.radio("Vyberte poskytovatele:", ["Gemini", "OpenAI"], horizontal=True)
+            new_manual_key = st.text_input("Vlastní API Key:", type="password", value=st.session_state.manual_api_key)
+            new_manual_provider = st.radio("Vyberte poskytovatele:", ["Gemini", "OpenAI"], index=0 if st.session_state.manual_api_provider == "Gemini" else 1, horizontal=True)
+            
+            if st.button("🔌 Aplikovat API Nastavení", use_container_width=True):
+                st.session_state.manual_api_key = new_manual_key
+                st.session_state.manual_api_provider = new_manual_provider
+                st.success("API nastavení uloženo pro tuto relaci!")
+                st.rerun()
             
         with st.container(border=True):
             st.markdown("### 🛠️ Systémové Nástroje")
