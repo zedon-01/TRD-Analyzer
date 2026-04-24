@@ -1031,7 +1031,7 @@ if st.session_state.current_page == "Dashboard":
 
                     st.markdown(f"""
                     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 10px;">
-                        <h3 style='margin:0; font-size: 1.2rem;'>Asset Price</h3>
+                        <h3 style='margin:0; font-size: 1.2rem;'>Cena aktiva</h3>
                         <div style="font-size: 0.8rem; color:#94A3B8;">{ticker}</div>
                     </div>
                     <div style="padding: 6px 0;">
@@ -1148,7 +1148,7 @@ if st.session_state.current_page == "Dashboard":
             # --- AI Generated Trade Ideas Header ---
             st.markdown(f"""
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 20px; margin-top: 30px;">
-                    <h2 style="margin:0; font-size: 1.4rem;">AI generated trade ideas</h2>
+                    <h2 style="margin:0; font-size: 1.4rem;">AI obchodní nápady</h2>
                     <span style="background: rgba(255,255,255,0.05); padding: 5px 12px; border-radius: 8px; font-weight:600; font-size:0.9rem; color:#00E676;">{ticker} • {st.session_state.tf_interval}</span>
                 </div>
             """, unsafe_allow_html=True)
@@ -1287,14 +1287,14 @@ if st.session_state.current_page == "Dashboard":
                 # --- Rychlý Export Section ---
                 with st.expander("📤 Rychlý Export Setupu (Copy-Paste)"):
                     export_text = f"""
-    🚀 TRADING SETUP: {ticker} ({st.session_state.tf_interval})
-    ---
-    🧭 Směr: {direction}
-    🎯 Entry: {setup.get('entry', 'N/A')}
-    ✅ Take Profit: {setup.get('tp', 'N/A')}
-    ❌ Stop Loss: {setup.get('sl', 'N/A')}
-    ---
-    🧠 Ratio: {setup.get('rationale', 'N/A')}
+🚀 TRADING SETUP: {ticker} ({st.session_state.tf_interval})
+---
+🧭 Směr: {direction}
+🎯 Vstup: {setup.get('entry', 'N/A')}
+✅ Cíl (TP): {setup.get('tp', 'N/A')}
+❌ Stop Loss: {setup.get('sl', 'N/A')}
+---
+🧠 Důvod: {setup.get('rationale', 'N/A')}
                     """
                     st.code(export_text.strip(), language="text")
 
