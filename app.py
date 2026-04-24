@@ -1346,6 +1346,24 @@ else:
                                 st.success(f"✅ OpenAI: Připojení v pořádku! (Klíč: ****{test_key[-4:]})")
                         except Exception as e:
                             st.error(f"❌ Test selhal: {str(e)}")
+
+            if st.button("📋 Vylistovat dostupné modely", use_container_width=True):
+                test_key, _ = get_api_credentials()
+                if not test_key:
+                    st.error("Chybí klíč!")
+                else:
+                    try:
+                        import google.generativeai as genai
+                        genai.configure(api_key=test_key.strip())
+                        models = genai.list_models()
+                        model_names = [m.name for m in models]
+                        if model_names:
+                            st.info("Dostupné modely pro váš klíč:")
+                            st.code("\n".join(model_names))
+                        else:
+                            st.warning("Google nevrátil žádné dostupné modely pro tento klíč.")
+                    except Exception as e:
+                        st.error(f"Nelze vylistovat modely: {str(e)}")
             
         with st.container(border=True):
             st.markdown("### 🛠️ Systémové Nástroje")
