@@ -58,6 +58,8 @@ if 'manual_api_key' not in st.session_state:
     st.session_state.manual_api_key = ""
 if 'manual_api_provider' not in st.session_state:
     st.session_state.manual_api_provider = "Gemini"
+if 'manual_model_name' not in st.session_state:
+    st.session_state.manual_model_name = "gemini-1.5-flash-latest"
 
 # No base64 needed, pure CSS logo used.
 
@@ -824,12 +826,16 @@ Požaduji, abys vygeneroval detailní odpověď jako validní JSON objekt bez Ma
 
         elif provider == "Gemini":
             genai.configure(api_key=api_key)
-            # Robust Fallback Matrix
-            models_to_try = [
+            # Use manual model if specified, else try fallbacks
+            models_to_try = [st.session_state.manual_model_name] if st.session_state.manual_model_name else []
+            models_to_try.extend([
+                'gemini-1.5-flash',
                 'gemini-1.5-flash-latest',
                 'gemini-1.5-pro-latest',
                 'gemini-pro'
-            ]
+            ])
+            # Filter out duplicates while preserving order
+            models_to_try = list(dict.fromkeys(models_to_try))
             
             last_err = None
             for model_name in models_to_try:
@@ -1329,6 +1335,8 @@ else:
             # Direct link to session state via 'key' parameter
             st.text_input("Vlastní API Key:", type="password", key="manual_api_key", help="Vložte klíč z Google AI Studio nebo OpenAI.")
             st.radio("Vyberte poskytovatele:", ["Gemini", "OpenAI"], key="manual_api_provider", horizontal=True)
+            
+            st.text_input("Preferovaný Model:", key="manual_model_name", help="Např. gemini-1.5-flash nebo gpt-4o")
             
             # Debug Mode Toggle
             st.checkbox("Ladící režim (Debug Mode)", key="debug_mode", help="Zobrazí detailní technické chyby pro diagnostiku.")
