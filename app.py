@@ -15,15 +15,15 @@ import pytz # Potřebné pro korektní časová pásma
 def get_api_credentials():
     """Dynamically fetch API keys, prioritizing manual session overrides over secrets."""
     # Check session state overrides first
-    manual_key = st.session_state.get("manual_api_key")
-    manual_provider = st.session_state.get("manual_api_provider")
+    manual_key = st.session_state.get("manual_api_key", "").strip()
+    manual_provider = st.session_state.get("manual_api_provider", "Gemini")
     
     if manual_key:
         return manual_key, manual_provider
         
     # Fallback to secrets
-    gemini_key = st.secrets.get("GEMINI_API_KEY")
-    openai_key = st.secrets.get("OPENAI_API_KEY")
+    gemini_key = st.secrets.get("GEMINI_API_KEY", "").strip()
+    openai_key = st.secrets.get("OPENAI_API_KEY", "").strip()
     
     if gemini_key:
         return gemini_key, "Gemini"
@@ -1328,10 +1328,18 @@ else:
             new_manual_provider = st.radio("Vyberte poskytovatele:", ["Gemini", "OpenAI"], index=0 if st.session_state.manual_api_provider == "Gemini" else 1, horizontal=True)
             
             if st.button("🔌 Aplikovat API Nastavení", use_container_width=True):
-                st.session_state.manual_api_key = new_manual_key
+                st.session_state.manual_api_key = new_manual_key.strip()
                 st.session_state.manual_api_provider = new_manual_provider
                 st.success("API nastavení uloženo pro tuto relaci!")
                 st.rerun()
+            
+            # Show active key indicator
+            current_key, _ = get_api_credentials()
+            if current_key:
+                masked_key = f"****{current_key[-4:]}" if len(current_key) > 4 else "****"
+                st.caption(f"Aktivní klíč: `{masked_key}`")
+            else:
+                st.caption("Aktivní klíč: `Nenalezen`")
             
         with st.container(border=True):
             st.markdown("### 🛠️ Systémové Nástroje")
