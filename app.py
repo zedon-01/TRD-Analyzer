@@ -1344,7 +1344,7 @@ else:
                             if test_provider == "Gemini":
                                 import google.generativeai as genai
                                 genai.configure(api_key=test_key.strip())
-                                test_model = genai.GenerativeModel('gemini-pro')
+                                test_model = genai.GenerativeModel('gemini-1.5-flash-latest')
                                 test_resp = test_model.generate_content("Say OK")
                                 if test_resp:
                                     st.success(f"✅ Gemini: Připojení v pořádku! (Klíč: ****{test_key[-4:]})")
@@ -1355,6 +1355,9 @@ else:
                                 st.success(f"✅ OpenAI: Připojení v pořádku! (Klíč: ****{test_key[-4:]})")
                         except Exception as e:
                             st.error(f"❌ Test selhal: {str(e)}")
+                            if st.session_state.get("debug_mode", False):
+                                import traceback
+                                st.code(traceback.format_exc())
 
             if st.button("📋 Vylistovat dostupné modely", use_container_width=True):
                 test_key, _ = get_api_credentials()
