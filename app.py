@@ -1333,6 +1333,29 @@ else:
                 st.success("API nastavení uloženo pro tuto relaci!")
                 st.rerun()
             
+            if st.button("🔍 Otestovat připojení", use_container_width=True):
+                test_key, test_provider = get_api_credentials()
+                if not test_key:
+                    st.error("Chybí klíč pro testování!")
+                else:
+                    with st.spinner("Testuji připojení..."):
+                        try:
+                            if test_provider == "Gemini":
+                                genai.configure(api_key=test_key)
+                                test_model = genai.GenerativeModel('gemini-1.5-flash')
+                                test_resp = test_model.generate_content("Say OK")
+                                if "OK" in test_resp.text:
+                                    st.success("✅ Gemini: Připojení v pořádku!")
+                                else:
+                                    st.warning(f"⚠️ Gemini odpovědělo nečekaně: {test_resp.text}")
+                            else:
+                                from openai import OpenAI
+                                client = OpenAI(api_key=test_key)
+                                client.chat.completions.create(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Say OK"}], max_tokens=5)
+                                st.success("✅ OpenAI: Připojení v pořádku!")
+                        except Exception as e:
+                            st.error(f"❌ Test selhal: {str(e)}")
+
             # Show active key indicator
             current_key, _ = get_api_credentials()
             if current_key:
