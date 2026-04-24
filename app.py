@@ -826,12 +826,8 @@ Požaduji, abys vygeneroval detailní odpověď jako validní JSON objekt bez Ma
             genai.configure(api_key=api_key)
             # Robust Fallback Matrix
             models_to_try = [
-                'models/gemini-2.5-flash',
-                'models/gemini-2.0-flash',
-                'models/gemini-3.1-pro-preview',
-                'models/gemini-flash-latest',
-                'models/gemini-pro-latest',
-                'gemini-1.5-flash',
+                'gemini-1.5-flash-latest',
+                'gemini-1.5-pro-latest',
                 'gemini-pro'
             ]
             
@@ -1339,7 +1335,7 @@ else:
                             if test_provider == "Gemini":
                                 import google.generativeai as genai
                                 genai.configure(api_key=test_key.strip())
-                                test_model = genai.GenerativeModel('gemini-1.5-flash')
+                                test_model = genai.GenerativeModel('gemini-pro')
                                 test_resp = test_model.generate_content("Say OK")
                                 if test_resp:
                                     st.success(f"✅ Gemini: Připojení v pořádku! (Klíč: ****{test_key[-4:]})")
