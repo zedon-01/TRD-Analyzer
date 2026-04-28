@@ -772,81 +772,6 @@ def plot_cot_gauge(title, long_pct, short_pct):
     )
     return fig
 
-def generate_analysis(ticker, df, fundamentals, news=None):
-    """Generates the AI analysis using the selected provider."""
-    
-    # Summarize Fundamentals
-    fund_str = json.dumps(fundamentals, indent=2, ensure_ascii=False) if fundamentals else "Žádná fundamentální data (pravděpodobně se jedná o krypto/komoditu/VIX)."
-    
-    # Summarize Technicals (Last available row)
-    last_row = df.iloc[-1]
-    prev_row = df.iloc[-2] if len(df) > 1 else df.iloc[-1]
-    
-    tech_str = f"""
-    Poslední cena (Close): {last_row.get('Close', 0):.2f}
-    RSI (14): {last_row.get('RSI', 0):.2f}
-    MACD: {last_row.get('MACD', 0):.2f} (Signal: {last_row.get('MACD_Signal', 0):.2f})
-    SMA 20: {last_row.get('SMA_20', 0):.2f}
-    SMA 50: {last_row.get('SMA_50', 0):.2f}
-    SMA 200: {last_row.get('SMA_200', 0):.2f}
-    20-day Volatilita (BBand šířka %): {((float(last_row.get('BB_High', 0)) - float(last_row.get('BB_Low', 0))) / float(last_row.get('Close', 1)) * 100):.2f}%
-    """
-
-    news_str = ""
-    if news:
-        news_str = "Aktuální zprávy z trhu:\n" + "\n".join([f"- {n['title']} ({n['publisher']})" for n in news])
-
-    sys_prompt = f"""
-Jsi elitní kvantitativní analytik. TVOU POVINNOSTÍ JE ODPOVÍDAT STRIKTNĚ V ČESKÉM JAZYCE.
-Provádíš rigorózní audit instrumentu: {ticker}
-Pracuj jako "Auditor AI" - hledej rizika, likviditní pasti a potvrzuj signály více indikátory.
-
-Základní fundamentální data:
-{fund_str}
-
-Technická data (poslední hodnoty):
-{tech_str}
-
-{news_str}
-
-Požaduji, abys vygeneroval detailní odpověď jako validní JSON objekt bez Markdown tagů s touto strukturou:
-{{
-  "sentiment_score": číslo od -100 (Silný výprodej) do 100 (Silná akumulace),
-  "sentiment_label": "Bullish" | "Bearish" | "Neutral",
-  "technical_analysis": "Stručný, úderný rozbor techniky (price action, divergence)...",
-  "fundamental_analysis": "Analýza makro/mikro kontextu...",
-  "synthesis_and_defense": "Proč je tvůj setup platný? Postav se proti davu.",
-  "trade_setup": {{
-    "direction": "Long" | "Short",
-    "entry": "Zóna vstupu",
-    "tp": "Target",
-    "sl": "Invalidace",
-    "rationale": "Kalkulované riziko"
-  }}
-}}
-"""
-
-    # Refresh API key inside the function to ensure we use the latest from secrets
-    api_key, provider = get_api_credentials()
-    
-    if not api_key:
-        st.error("❌ Chybí API klíč! Prosím vložte jej do .streamlit/secrets.toml")
-        return {}
-
-    try:
-        if provider == "OpenAI":
-            client = OpenAI(api_key=api_key)
-            response = client.chat.completions.create(
-                model="gpt-4o",
-                response_format={ "type": "json_object" },
-                messages=[
-                    {"role": "system", "content": "Jsi expertní kvantitativní analytik. Navracíš striktně validní JSON."},
-                    {"role": "user", "content": sys_prompt}
-                ],
-                temperature=0.7
-            )
-            return json.loads(response.choices[0].message.content)
-
 def find_available_gemini_models(api_key):
     """Automatically find models available for this API key to avoid 404s."""
     try:
@@ -860,39 +785,49 @@ def find_available_gemini_models(api_key):
     except Exception:
         return []
 
-def generate_analysis(ticker, data_summary, fundamentals, news):
+def generate_analysis(ticker_symbol, df, fundamentals, news=None):
     """Main AI Engine for trading synthesis with dynamic model selection."""
     api_key, provider = get_api_credentials()
     
     if not api_key:
-        st.error("❌ Chybí API klíč! Prosím vložte jej do Nastavení.")
-        return {}
+        return None
 
-    # Define the core system prompt
+    # Summarize Fundamentals
+    fund_str = json.dumps(fundamentals, indent=2, ensure_ascii=False) if fundamentals else "Žádná fundamentální data."
+    
+    # Summarize Technicals (Last available row)
+    last_row = df.iloc[-1]
+    tech_str = f"""
+    Cena: {last_row.get('Close', 0):.2f}
+    RSI: {last_row.get('RSI', 0):.2f}
+    MACD: {last_row.get('MACD', 0):.2f} (Signal: {last_row.get('MACD_Signal', 0):.2f})
+    SMA 50: {last_row.get('SMA_50', 0):.2f}
+    SMA 200: {last_row.get('SMA_200', 0):.2f}
+    """
+
+    news_str = ""
+    if news:
+        news_str = "Zprávy:\n" + "\n".join([f"- {n['title']}" for n in news[:3]])
+
     sys_prompt = f"""
-    Jsi expertní kvantitativní analytik a profesionální trader. Tvým úkolem je syntetizovat technická a fundamentální data pro symbol {ticker} a vytvořit rigorózní obchodní plán v ČEŠTINĚ.
+    Jsi expertní kvantitativní analytik. Navracíš striktně validní JSON v ČEŠTINĚ.
+    Symbol: {ticker_symbol}
+    Data: {tech_str}
+    Fundamenty: {fund_str}
+    {news_str}
     
-    ### DATA K ANALÝZE:
-    - Technický souhrn: {data_summary}
-    - Fundamenty: {fundamentals}
-    - Poslední zprávy: {news}
-    
-    ### POŽADAVKY NA VÝSTUP (PŘÍSNĚ VALIDNÍ JSON):
+    Výstup:
     {{
       "trade_setup": {{
-        "direction": "Long / Short / Neutral",
-        "entry": "přesná cenová hladina",
-        "tp": "cílová hladina (Take Profit)",
-        "sl": "hladina pro výstup v neprospěch (Stop Loss)",
-        "rationale": "3 věty vysvětlující logiku vstupu"
+        "direction": "Long/Short",
+        "entry": "vstup", "tp": "cíl", "sl": "stop",
+        "rationale": "důvod"
       }},
-      "sentiment_score": -100 až 100 (číslo),
-      "technical_analysis": "souhrn technické situace (max 3 věty)",
-      "fundamental_analysis": "souhrn fundamentálního pozadí (max 3 věty)",
-      "synthesis_and_defense": "proč je tento setup pravděpodobný a jaká jsou rizika"
+      "sentiment_score": -100 až 100,
+      "technical_analysis": "rozbor",
+      "fundamental_analysis": "fundament",
+      "synthesis_and_defense": "obhajoba"
     }}
-    
-    Odpovídej POUZE ve formátu JSON v češtině. Nepoužívej žádné úvodní řeči.
     """
 
     try:
@@ -901,10 +836,7 @@ def generate_analysis(ticker, data_summary, fundamentals, news):
             response = client.chat.completions.create(
                 model="gpt-4o",
                 response_format={ "type": "json_object" },
-                messages=[
-                    {"role": "system", "content": "Jsi expertní kvantitativní analytik. Navracíš striktně validní JSON."},
-                    {"role": "user", "content": sys_prompt}
-                ],
+                messages=[{"role": "system", "content": "Jsi analytik. Vracíš JSON."}, {"role": "user", "content": sys_prompt}],
                 temperature=0.7
             )
             return json.loads(response.choices[0].message.content)
@@ -913,20 +845,16 @@ def generate_analysis(ticker, data_summary, fundamentals, news):
             import google.generativeai as genai
             genai.configure(api_key=api_key)
             
-            # 1. Dynamic Model Discovery
+            # Dynamic Model Discovery
             models_to_try = find_available_gemini_models(api_key)
-            
-            # 2. Hardcoded fallbacks if discovery fails or is empty
             if not models_to_try:
-                models_to_try = ['gemini-1.5-flash', 'gemini-pro', 'models/gemini-1.5-flash']
+                models_to_try = ['gemini-1.5-flash', 'gemini-pro']
             
-            # 3. Add manual override if present
+            # Manual override priority
             if st.session_state.get("manual_model_name"):
                 m = st.session_state.manual_model_name.strip()
-                if m not in models_to_try:
-                    models_to_try.insert(0, m)
+                if m not in models_to_try: models_to_try.insert(0, m)
             
-            # Filter out duplicates
             models_to_try = list(dict.fromkeys(models_to_try))
             
             last_err = None
@@ -938,29 +866,22 @@ def generate_analysis(ticker, data_summary, fundamentals, news):
                         response = model.generate_content(sys_prompt)
                         return json.loads(response.text)
                     except Exception:
-                        # Fallback to plain text if JSON mode fails
+                        # Fallback to plain text
                         model = genai.GenerativeModel(model_name)
                         response = model.generate_content(sys_prompt)
                         text = response.text
-                        if "```json" in text:
-                            text = text.split("```json")[1].split("```")[0].strip()
-                        elif "```" in text:
-                            text = text.split("```")[1].split("```")[0].strip()
+                        if "```json" in text: text = text.split("```json")[1].split("```")[0].strip()
+                        elif "```" in text: text = text.split("```")[1].split("```")[0].strip()
                         return json.loads(text)
                 except Exception as e:
                     last_err = str(e)
-                    continue # Try next available model
+                    continue
             
-            # If all fail
-            if last_err:
-                if "429" in last_err:
-                    st.error("⚠️ AI analýza se nezdařila: Limit Googlu vyčerpán (Quota). Použijte jiný klíč.")
-                else:
-                    st.error(f"⚠️ AI analýza se nezdařila u všech modelů. Poslední chyba: {last_err}")
+            if last_err: st.error(f"AI selhala: {last_err}")
             return {}
             
     except Exception as e:
-        st.error(f"⚠️ Chyba při komunikaci s AI ({provider}). Detail: {e}")
+        st.error(f"Chyba AI: {e}")
         return {}
 
 
