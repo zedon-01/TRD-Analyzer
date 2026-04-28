@@ -343,11 +343,16 @@ if 'chat_history' not in st.session_state:
 
 # --- Functions ---
 
-import requests
+try:
+    from curl_cffi import requests as curl_requests
+except ImportError:
+    import requests as curl_requests
 
 def get_yfinance_session():
-    """Create a session with a browser-like user agent to avoid rate limiting."""
-    session = requests.Session()
+    """Create a session with curl_cffi to avoid Yahoo's bot detection."""
+    session = curl_requests.Session()
+    # No need to set User-Agent manually with curl_cffi usually, 
+    # but it doesn't hurt.
     session.headers.update({
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
     })
