@@ -817,24 +817,29 @@ def generate_analysis(ticker_symbol, df, fundamentals, news=None):
         news_str = "Zprávy:\n" + "\n".join([f"- {n['title']}" for n in news[:3]])
 
     sys_prompt = f"""
-    Jsi expertní kvantitativní analytik. Navracíš striktně validní JSON v ČEŠTINĚ.
-    Symbol: {ticker_symbol}
-    Data: {tech_str}
-    Fundamenty: {fund_str}
-    {news_str}
+    Jsi expertní kvantitativní analytik a profesionální hedge-fund trader. Tvým úkolem je vytvořit rigorózní audit pro symbol {ticker_symbol}.
     
-    Výstup:
+    ### DATA K ANALÝZE:
+    - Technický souhrn: {tech_str}
+    - Fundamenty: {fund_str}
+    - Zprávy: {news_str}
+    
+    ### POŽADAVKY NA DETAILNÍ VÝSTUP (PŘÍSNĚ VALIDNÍ JSON V ČEŠTINĚ):
     {{
       "trade_setup": {{
-        "direction": "Long/Short",
-        "entry": "vstup", "tp": "cíl", "sl": "stop",
-        "rationale": "důvod"
+        "direction": "Long / Short / Neutral",
+        "entry": "přesná cenová hladina",
+        "tp": "cílová hladina (Take Profit)",
+        "sl": "hladina pro výstup (Stop Loss)",
+        "rationale": "Důkladné 3-4 věty vysvětlující konkrétní logiku vstupu."
       }},
-      "sentiment_score": -100 až 100,
-      "technical_analysis": "rozbor",
-      "fundamental_analysis": "fundament",
-      "synthesis_and_defense": "obhajoba"
+      "sentiment_score": číslo od -100 do 100,
+      "technical_analysis": "Detailní rozbor technické situace (trend, RSI, MACD divergence, supporty/rezistence). Minimálně 40 slov.",
+      "fundamental_analysis": "Hloubková analýza fundamentálního pozadí a makroekonomického kontextu pro tento symbol. Minimálně 40 slov.",
+      "synthesis_and_defense": "Závěrečná syntéza: Proč je tento obchodní setup pravděpodobnější než ostatní scénáře? Jaká jsou největší rizika? Minimálně 50 slov."
     }}
+    
+    Odpovídej POUZE ve formátu JSON v češtině.
     """
 
     try:
@@ -1003,7 +1008,7 @@ if st.session_state.current_page == "Dashboard":
             <div style="display:flex; gap: 15px; margin-bottom: 20px;">
                 <span style="color:#10B981; font-size:0.75rem;"><span class="pulse-dot"></span> System Online</span>
                 <span style="color:#38BDF8; font-size:0.75rem;">● Data Feed: OK</span>
-                <span style="color:{'#10B981' if api_key else '#EF4444'}; font-size:0.75rem;">● AI Engine: {'Online' if api_key else 'Missing Key'}</span>
+                <span style="color:{'#10B981' if get_api_credentials()[0] else '#EF4444'}; font-size:0.75rem;">● AI Engine: {'Online' if get_api_credentials()[0] else 'Offline'}</span>
             </div>
         """, unsafe_allow_html=True)
 
