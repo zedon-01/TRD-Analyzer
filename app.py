@@ -1374,11 +1374,34 @@ else:
                             if test_provider == "Gemini":
                                 import google.generativeai as genai
                                 genai.configure(api_key=test_key.strip())
-                                # Try the most stable model name for testing
-                                test_model = genai.GenerativeModel('gemini-1.5-flash')
-                                test_resp = test_model.generate_content("Say OK")
-                                if test_resp:
-                                    st.success(f"✅ Gemini: Připojení je v pořádku!")
+                                
+                                # Use the same robust fallback list as the main engine
+                                test_models = [
+                                    'gemini-1.5-flash',
+                                    'models/gemini-1.5-flash',
+                                    'gemini-1.5-pro',
+                                    'models/gemini-pro',
+                                    'gemini-pro'
+                                ]
+                                
+                                worked_model = None
+                                last_test_err = None
+                                
+                                for tm in test_models:
+                                    try:
+                                        t_model = genai.GenerativeModel(tm)
+                                        t_resp = t_model.generate_content("Say OK")
+                                        if t_resp:
+                                            worked_model = tm
+                                            break
+                                    except Exception as e:
+                                        last_test_err = str(e)
+                                        continue
+                                
+                                if worked_model:
+                                    st.success(f"✅ Gemini: Připojení je v pořádku! (Model: {worked_model})")
+                                else:
+                                    st.error(f"❌ Test selhal u všech modelů. Poslední chyba: {last_test_err}")
                             else:
                                 from openai import OpenAI
                                 client = OpenAI(api_key=test_key.strip())
