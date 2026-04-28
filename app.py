@@ -1195,8 +1195,20 @@ if st.session_state.current_page == "Dashboard":
                 else:
                     with st.spinner("Sběr dat a generování posudku..."):
                         try:
-                            fundamentals = fetch_fundamentals(ticker)
-                            news_context = fetch_news(ticker)
+                            # Fetch data with individual error handling to avoid total failure
+                            try:
+                                fundamentals = fetch_fundamentals(ticker)
+                            except Exception:
+                                fundamentals = {}
+                                st.warning("⚠️ Fundamentální data dočasně nedostupná (Yahoo Limit).")
+                            
+                            try:
+                                news_context = fetch_news(ticker)
+                            except Exception:
+                                news_context = []
+                                st.warning("⚠️ Tržní zprávy dočasně nedostupné (Yahoo Limit).")
+                                
+                            # Now call the AI
                             ai_data = generate_analysis(ticker, df_processed, fundamentals, news=news_context)
                         
                             if ai_data:
@@ -1217,9 +1229,10 @@ if st.session_state.current_page == "Dashboard":
                                     st.session_state.analysis_history.pop(0)
                                 
                         except Exception as e:
-                            st.error(f"Při komunikaci s AI nastala chyba: {e}")
-                            if "401" in str(e):
-                                st.warning("Tip: Kód 401 značí neplatný API klíč. Zkontrolujte ho v Settings.")
+                            if "429" in str(e) or "Too Many Requests" in str(e):
+                                st.error("🚦 Limit požadavků vyčerpán. Yahoo Finance nebo AI blokuje další dotazy. Zkuste to za minutu.")
+                            else:
+                                st.error(f"Při generování analýzy nastala chyba: {e}")
 
             # Zobrazení AI dat ze session_state
             current_context = f"{ticker}_{st.session_state.tf_interval}"
