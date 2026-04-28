@@ -773,7 +773,10 @@ def plot_cot_gauge(title, long_pct, short_pct):
     return fig
 
 def find_available_gemini_models(api_key):
-    """Automatically find models available for this API key to avoid 404s."""
+    """Automatically find models available for this API key and cache them."""
+    if 'cached_gemini_models' in st.session_state and st.session_state.get('cached_api_key') == api_key:
+        return st.session_state.cached_gemini_models
+
     try:
         import google.generativeai as genai
         genai.configure(api_key=api_key)
@@ -781,6 +784,10 @@ def find_available_gemini_models(api_key):
         for m in genai.list_models():
             if 'generateContent' in m.supported_generation_methods:
                 available_models.append(m.name)
+        
+        # Cache the results
+        st.session_state.cached_gemini_models = available_models
+        st.session_state.cached_api_key = api_key
         return available_models
     except Exception:
         return []
@@ -877,7 +884,11 @@ def generate_analysis(ticker_symbol, df, fundamentals, news=None):
                     last_err = str(e)
                     continue
             
-            if last_err: st.error(f"AI selhala: {last_err}")
+            if last_err: 
+                if "429" in last_err:
+                    st.error("⚠️ AI Limit: Google vás dočasně omezil (Too Many Requests). Počkejte minutu nebo použijte jiný klíč.")
+                else:
+                    st.error(f"AI selhala: {last_err}")
             return {}
             
     except Exception as e:
