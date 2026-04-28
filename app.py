@@ -1361,54 +1361,47 @@ else:
             st.text_input("Vlastní API Key:", type="password", key="manual_api_key", help="Vložte klíč z Google AI Studio nebo OpenAI.")
             st.radio("Vyberte poskytovatele:", ["Gemini", "OpenAI"], key="manual_api_provider", horizontal=True)
             
-            st.text_input("Preferovaný Model:", key="manual_model_name", help="Např. gemini-1.5-flash nebo gpt-4o")
-            
-            # Debug Mode Toggle
-            st.checkbox("Ladící režim (Debug Mode)", key="debug_mode", help="Zobrazí detailní technické chyby pro diagnostiku.")
-            
             st.divider()
+            
             if st.button("🔍 Otestovat připojení", use_container_width=True):
                 test_key, test_provider = get_api_credentials()
                 if not test_key or not test_key.strip():
                     st.error("Chybí klíč pro testování! Vložte jej do pole výše.")
                 else:
                     with st.spinner("Testuji připojení..."):
+                        # Use the actual generate_analysis engine logic for the test to be 100% sure
                         try:
                             if test_provider == "Gemini":
                                 import google.generativeai as genai
                                 genai.configure(api_key=test_key.strip())
-                                test_model = genai.GenerativeModel('models/gemini-1.0-pro-001')
+                                # Try the most stable model name for testing
+                                test_model = genai.GenerativeModel('gemini-1.5-flash')
                                 test_resp = test_model.generate_content("Say OK")
                                 if test_resp:
-                                    st.success(f"✅ Gemini: Připojení v pořádku! (Klíč: ****{test_key[-4:]})")
+                                    st.success(f"✅ Gemini: Připojení je v pořádku!")
                             else:
                                 from openai import OpenAI
                                 client = OpenAI(api_key=test_key.strip())
                                 client.chat.completions.create(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Say OK"}], max_tokens=5)
-                                st.success(f"✅ OpenAI: Připojení v pořádku! (Klíč: ****{test_key[-4:]})")
+                                st.success(f"✅ OpenAI: Připojení je v pořádku!")
                         except Exception as e:
                             st.error(f"❌ Test selhal: {str(e)}")
-                            if st.session_state.get("debug_mode", False):
-                                import traceback
-                                st.code(traceback.format_exc())
 
-            if st.button("📋 Vylistovat dostupné modely", use_container_width=True):
-                test_key, _ = get_api_credentials()
-                if not test_key:
-                    st.error("Chybí klíč!")
-                else:
-                    try:
-                        import google.generativeai as genai
-                        genai.configure(api_key=test_key.strip())
-                        models = genai.list_models()
-                        model_names = [m.name for m in models]
-                        if model_names:
-                            st.info("Dostupné modely pro váš klíč:")
+            # Technical settings moved to an expander to keep UI clean
+            with st.expander("🛠️ Pokročilá Diagnostika"):
+                st.checkbox("Ladící režim (Debug Mode)", key="debug_mode")
+                st.text_input("Manuální název modelu:", key="manual_model_name")
+                if st.button("📋 Vylistovat dostupné modely", use_container_width=True):
+                    test_key, _ = get_api_credentials()
+                    if test_key:
+                        try:
+                            import google.generativeai as genai
+                            genai.configure(api_key=test_key.strip())
+                            models = genai.list_models()
+                            model_names = [m.name for m in models]
                             st.code("\n".join(model_names))
-                        else:
-                            st.warning("Google nevrátil žádné dostupné modely pro tento klíč.")
-                    except Exception as e:
-                        st.error(f"Nelze vylistovat modely: {str(e)}")
+                        except Exception as e:
+                            st.error(str(e))
             
         with st.container(border=True):
             st.markdown("### 🛠️ Systémové Nástroje")
