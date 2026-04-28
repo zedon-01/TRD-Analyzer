@@ -343,24 +343,41 @@ if 'chat_history' not in st.session_state:
 
 # --- Functions ---
 
-@st.cache_data(show_spinner="Načítám historická data...")
+import requests
+
+def get_yfinance_session():
+    """Create a session with a browser-like user agent to avoid rate limiting."""
+    session = requests.Session()
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    })
+    return session
+
+@st.cache_data(show_spinner="Načítám historická data...", ttl=300)
 def fetch_data(ticker_symbol, period, interval="1d"):
-    """Fetches historical market data with interval support."""
-    ticker = yf.Ticker(ticker_symbol)
+    """Fetches historical market data with interval support and custom session."""
+    session = get_yfinance_session()
+    ticker = yf.Ticker(ticker_symbol, session=session)
     try:
-        df = ticker.history(period=period, interval=interval)
-        if df.empty:
-            return df
-        df.index = df.index.tz_localize(None)
-        return df
+        # Simple retry logic
+        for _ in range(2):
+            df = ticker.history(period=period, interval=interval)
+            if not df.empty:
+                df.index = df.index.tz_localize(None)
+                return df
+        return pd.DataFrame()
     except Exception as e:
-        st.error(f"Chyba při stahování dat pro ticker {ticker_symbol}: {e}")
+        if "Rate limited" in str(e) or "429" in str(e):
+            st.warning(f"📡 Yahoo Finance dočasně omezilo přístup (Rate Limit). Zkouším znovu...")
+        else:
+            st.error(f"Chyba při stahování dat pro ticker {ticker_symbol}: {e}")
         return pd.DataFrame()
 
-@st.cache_data(show_spinner="Načítám fundamentální data...")
+@st.cache_data(show_spinner="Načítám fundamentální data...", ttl=3600)
 def fetch_fundamentals(ticker_symbol):
-    """Fetches fundamental data from yfinance."""
-    ticker = yf.Ticker(ticker_symbol)
+    """Fetches fundamental data from yfinance with custom session."""
+    session = get_yfinance_session()
+    ticker = yf.Ticker(ticker_symbol, session=session)
     info = ticker.info
     
     fundamentals = {}
@@ -381,8 +398,9 @@ def fetch_fundamentals(ticker_symbol):
 
 @st.cache_data(show_spinner="Načítám aktuální zprávy...", ttl=900)
 def fetch_news(ticker_symbol):
-    """Fetches latest news from yfinance with robust parsing."""
-    ticker = yf.Ticker(ticker_symbol)
+    """Fetches latest news from yfinance with robust parsing and custom session."""
+    session = get_yfinance_session()
+    ticker = yf.Ticker(ticker_symbol, session=session)
     try:
         news_data = ticker.news
         if not news_data:
