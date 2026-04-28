@@ -826,35 +826,60 @@ Požaduji, abys vygeneroval detailní odpověď jako validní JSON objekt bez Ma
 
         elif provider == "Gemini":
             genai.configure(api_key=api_key)
-            # Use manual model if specified, else try fallbacks
-            models_to_try = [st.session_state.manual_model_name] if st.session_state.manual_model_name else []
-            models_to_try.extend([
-                'models/gemini-pro',
+            
+            # Expanded robust model list
+            base_models = [
                 'gemini-1.5-flash',
                 'gemini-1.5-pro',
+                'gemini-1.0-pro',
                 'gemini-pro'
-            ])
-            # Filter out duplicates while preserving order
+            ]
+            
+            models_to_try = []
+            # 1. First try the manual one if provided
+            if st.session_state.get("manual_model_name"):
+                m = st.session_state.manual_model_name.strip()
+                models_to_try.append(m)
+                if not m.startswith("models/"):
+                    models_to_try.append(f"models/{m}")
+            
+            # 2. Add standard models with and without prefix
+            for bm in base_models:
+                models_to_try.append(bm)
+                models_to_try.append(f"models/{bm}")
+                models_to_try.append(f"{bm}-latest")
+                
+            # Filter out duplicates
             models_to_try = list(dict.fromkeys(models_to_try))
             
             last_err = None
             for model_name in models_to_try:
                 try:
-                    model = genai.GenerativeModel(model_name, generation_config={"response_mime_type": "application/json"})
-                    response = model.generate_content(sys_prompt)
-                    # Success!
-                    return json.loads(response.text)
+                    # Try with JSON mode first
+                    try:
+                        model = genai.GenerativeModel(model_name, generation_config={"response_mime_type": "application/json"})
+                        response = model.generate_content(sys_prompt)
+                        return json.loads(response.text)
+                    except Exception as json_err:
+                        # If JSON mode isn't supported by this specific model/key, try plain text
+                        model = genai.GenerativeModel(model_name)
+                        response = model.generate_content(sys_prompt)
+                        # Attempt to extract JSON from markdown or raw text
+                        text = response.text
+                        if "```json" in text:
+                            text = text.split("```json")[1].split("```")[0].strip()
+                        elif "```" in text:
+                            text = text.split("```")[1].split("```")[0].strip()
+                        return json.loads(text)
                 except Exception as e:
-                    last_err = f"{type(e).__name__}: {str(e)}"
+                    last_err = str(e)
                     if st.session_state.get("debug_mode", False):
-                        st.error(f"DEBUG - Model {model_name} selhal: {last_err}")
-                        import traceback
-                        st.code(traceback.format_exc())
-                        
-                    if "429" in str(e):
-                        st.warning("⚠️ Dosáhli jste denního limitu (Quota 429) u Google Gemini. Zkuste to prosím později nebo použijte klíč z nového projektu.")
-                        break 
-                    continue 
+                        st.write(f"🔍 Pokus s modelem {model_name} selhal: {last_err}")
+                    continue # Try next model
+            
+            # If all fail
+            st.error(f"❌ AI analýza selhala po vyzkoušení všech modelů. Poslední chyba: {last_err}")
+            return {}
             
             # Ultra-Simplified Error Reporting
             if last_err:
