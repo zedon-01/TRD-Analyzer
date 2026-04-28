@@ -900,6 +900,37 @@ def generate_analysis(ticker_symbol, df, fundamentals, news=None):
         st.error(f"Chyba AI: {e}")
         return {}
 
+def chat_with_ai(prompt, analysis_data):
+    """Allows follow-up questions about the current analysis."""
+    api_key, provider = get_api_credentials()
+    if not api_key: return "Chybí API klíč."
+    
+    context = f"Analýza: {json.dumps(analysis_data, ensure_ascii=False)}"
+    
+    try:
+        if provider == "OpenAI":
+            from openai import OpenAI
+            client = OpenAI(api_key=api_key)
+            resp = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": f"Jsi analytik. Odpovídej k věci na základě této analýzy: {context}"},
+                    {"role": "user", "content": prompt}
+                ]
+            )
+            return resp.choices[0].message.content
+        else:
+            import google.generativeai as genai
+            genai.configure(api_key=api_key)
+            # Use cached model or discovery
+            models = find_available_gemini_models(api_key)
+            model_name = models[0] if models else "gemini-1.5-flash"
+            model = genai.GenerativeModel(model_name)
+            resp = model.generate_content(f"Kontext: {context}\n\nUživatel se ptá: {prompt}")
+            return resp.text
+    except Exception as e:
+        return f"Chyba chatu: {e}"
+
 
 # --- UI Layout ---
 
@@ -1008,7 +1039,7 @@ if st.session_state.current_page == "Dashboard":
             <div style="display:flex; gap: 15px; margin-bottom: 20px;">
                 <span style="color:#10B981; font-size:0.75rem;"><span class="pulse-dot"></span> System Online</span>
                 <span style="color:#38BDF8; font-size:0.75rem;">● Data Feed: OK</span>
-                <span style="color:{'#10B981' if get_api_credentials()[0] else '#EF4444'}; font-size:0.75rem;">● AI Engine: {'Online' if get_api_credentials()[0] else 'Offline'}</span>
+                <span style="color:{'#10B981' if (get_api_credentials()[0] and len(get_api_credentials()[0]) > 5) else '#EF4444'}; font-size:0.75rem;">● AI Engine: {'Online' if (get_api_credentials()[0] and len(get_api_credentials()[0]) > 5) else 'Offline'}</span>
             </div>
         """, unsafe_allow_html=True)
 
@@ -1344,6 +1375,27 @@ if st.session_state.current_page == "Dashboard":
 🧠 Důvod: {setup.get('rationale', 'N/A')}
                     """
                     st.code(export_text.strip(), language="text")
+            
+                # --- INTERAKTIVNÍ CHAT ---
+                st.markdown("---")
+                st.markdown("### 💬 Dotaz na AI k této analýze")
+                
+                # Zobrazení historie chatu
+                for msg in st.session_state.chat_history:
+                    with st.chat_message(msg["role"]):
+                        st.write(msg["content"])
+                
+                # Input pro nový dotaz
+                if chat_input := st.chat_input("Zeptejte se na detaily analýzy..."):
+                    st.session_state.chat_history.append({"role": "user", "content": chat_input})
+                    with st.chat_message("user"):
+                        st.write(chat_input)
+                    
+                    with st.chat_message("assistant"):
+                        with st.spinner("AI přemýšlí..."):
+                            response = chat_with_ai(chat_input, ai_data)
+                            st.write(response)
+                            st.session_state.chat_history.append({"role": "assistant", "content": response})
 
 
 else:
