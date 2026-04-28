@@ -847,31 +847,85 @@ Požaduji, abys vygeneroval detailní odpověď jako validní JSON objekt bez Ma
             )
             return json.loads(response.choices[0].message.content)
 
+def find_available_gemini_models(api_key):
+    """Automatically find models available for this API key to avoid 404s."""
+    try:
+        import google.generativeai as genai
+        genai.configure(api_key=api_key)
+        available_models = []
+        for m in genai.list_models():
+            if 'generateContent' in m.supported_generation_methods:
+                available_models.append(m.name)
+        return available_models
+    except Exception:
+        return []
+
+def generate_analysis(ticker, data_summary, fundamentals, news):
+    """Main AI Engine for trading synthesis with dynamic model selection."""
+    api_key, provider = get_api_credentials()
+    
+    if not api_key:
+        st.error("❌ Chybí API klíč! Prosím vložte jej do Nastavení.")
+        return {}
+
+    # Define the core system prompt
+    sys_prompt = f"""
+    Jsi expertní kvantitativní analytik a profesionální trader. Tvým úkolem je syntetizovat technická a fundamentální data pro symbol {ticker} a vytvořit rigorózní obchodní plán v ČEŠTINĚ.
+    
+    ### DATA K ANALÝZE:
+    - Technický souhrn: {data_summary}
+    - Fundamenty: {fundamentals}
+    - Poslední zprávy: {news}
+    
+    ### POŽADAVKY NA VÝSTUP (PŘÍSNĚ VALIDNÍ JSON):
+    {{
+      "trade_setup": {{
+        "direction": "Long / Short / Neutral",
+        "entry": "přesná cenová hladina",
+        "tp": "cílová hladina (Take Profit)",
+        "sl": "hladina pro výstup v neprospěch (Stop Loss)",
+        "rationale": "3 věty vysvětlující logiku vstupu"
+      }},
+      "sentiment_score": -100 až 100 (číslo),
+      "technical_analysis": "souhrn technické situace (max 3 věty)",
+      "fundamental_analysis": "souhrn fundamentálního pozadí (max 3 věty)",
+      "synthesis_and_defense": "proč je tento setup pravděpodobný a jaká jsou rizika"
+    }}
+    
+    Odpovídej POUZE ve formátu JSON v češtině. Nepoužívej žádné úvodní řeči.
+    """
+
+    try:
+        if provider == "OpenAI":
+            client = OpenAI(api_key=api_key)
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                response_format={ "type": "json_object" },
+                messages=[
+                    {"role": "system", "content": "Jsi expertní kvantitativní analytik. Navracíš striktně validní JSON."},
+                    {"role": "user", "content": sys_prompt}
+                ],
+                temperature=0.7
+            )
+            return json.loads(response.choices[0].message.content)
+
         elif provider == "Gemini":
+            import google.generativeai as genai
             genai.configure(api_key=api_key)
             
-            # Expanded robust model list
-            base_models = [
-                'gemini-1.5-flash',
-                'gemini-1.5-pro',
-                'gemini-1.0-pro',
-                'gemini-pro'
-            ]
+            # 1. Dynamic Model Discovery
+            models_to_try = find_available_gemini_models(api_key)
             
-            models_to_try = []
-            # 1. First try the manual one if provided
+            # 2. Hardcoded fallbacks if discovery fails or is empty
+            if not models_to_try:
+                models_to_try = ['gemini-1.5-flash', 'gemini-pro', 'models/gemini-1.5-flash']
+            
+            # 3. Add manual override if present
             if st.session_state.get("manual_model_name"):
                 m = st.session_state.manual_model_name.strip()
-                models_to_try.append(m)
-                if not m.startswith("models/"):
-                    models_to_try.append(f"models/{m}")
+                if m not in models_to_try:
+                    models_to_try.insert(0, m)
             
-            # 2. Add standard models with and without prefix
-            for bm in base_models:
-                models_to_try.append(bm)
-                models_to_try.append(f"models/{bm}")
-                models_to_try.append(f"{bm}-latest")
-                
             # Filter out duplicates
             models_to_try = list(dict.fromkeys(models_to_try))
             
@@ -883,11 +937,10 @@ Požaduji, abys vygeneroval detailní odpověď jako validní JSON objekt bez Ma
                         model = genai.GenerativeModel(model_name, generation_config={"response_mime_type": "application/json"})
                         response = model.generate_content(sys_prompt)
                         return json.loads(response.text)
-                    except Exception as json_err:
-                        # If JSON mode isn't supported by this specific model/key, try plain text
+                    except Exception:
+                        # Fallback to plain text if JSON mode fails
                         model = genai.GenerativeModel(model_name)
                         response = model.generate_content(sys_prompt)
-                        # Attempt to extract JSON from markdown or raw text
                         text = response.text
                         if "```json" in text:
                             text = text.split("```json")[1].split("```")[0].strip()
@@ -896,27 +949,19 @@ Požaduji, abys vygeneroval detailní odpověď jako validní JSON objekt bez Ma
                         return json.loads(text)
                 except Exception as e:
                     last_err = str(e)
-                    if st.session_state.get("debug_mode", False):
-                        st.write(f"🔍 Pokus s modelem {model_name} selhal: {last_err}")
-                    continue # Try next model
+                    continue # Try next available model
             
             # If all fail
-            st.error(f"❌ AI analýza selhala po vyzkoušení všech modelů. Poslední chyba: {last_err}")
-            return {}
-            
-            # Ultra-Simplified Error Reporting
             if last_err:
                 if "429" in last_err:
-                    st.error("⚠️ AI analýza se nezdařila: Váš denní limit u Googlu je vyčerpán. Prosím použijte klíč z NOVÉHO PROJEKTU v AI Studiu nebo počkejte na zítřek.")
+                    st.error("⚠️ AI analýza se nezdařila: Limit Googlu vyčerpán (Quota). Použijte jiný klíč.")
                 else:
-                    st.error(f"⚠️ AI analýza se nezdařila: {last_err}")
+                    st.error(f"⚠️ AI analýza se nezdařila u všech modelů. Poslední chyba: {last_err}")
             return {}
             
     except Exception as e:
         st.error(f"⚠️ Chyba při komunikaci s AI ({provider}). Detail: {e}")
         return {}
-
-    return {}
 
 
 # --- UI Layout ---
@@ -1410,6 +1455,16 @@ else:
                                 worked_model = None
                                 last_test_err = None
                                 
+                                # Use dynamic discovery for the test
+                                test_models = find_available_gemini_models(test_key.strip())
+                                
+                                # Add some fallbacks just in case discovery fails
+                                if not test_models:
+                                    test_models = ['gemini-1.5-flash', 'gemini-pro']
+                                
+                                worked_model = None
+                                last_test_err = None
+                                
                                 for tm in test_models:
                                     try:
                                         t_model = genai.GenerativeModel(tm)
@@ -1424,7 +1479,7 @@ else:
                                 if worked_model:
                                     st.success(f"✅ Gemini: Připojení je v pořádku! (Model: {worked_model})")
                                 else:
-                                    st.error(f"❌ Test selhal u všech modelů. Poslední chyba: {last_test_err}")
+                                    st.error(f"❌ Test selhal. Google pro váš klíč nenašel žádné dostupné AI modely. Zkontrolujte, zda máte v AI Studiu aktivní projekt.")
                             else:
                                 from openai import OpenAI
                                 client = OpenAI(api_key=test_key.strip())
