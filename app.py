@@ -845,11 +845,14 @@ def generate_analysis(ticker_symbol, df, fundamentals, news=None):
     sys_prompt = f"""
     Jsi špičkový kvantitativní analytik pro institucionální hedge-fond. Tvým úkolem je provést nekompromisní RIGORÓZNÍ AUDIT instrumentu {ticker_symbol}.
     
-    ### TVŮJ ANALYTICKÝ RÁMEC:
-    1. **Price Action & Struktura**: Identifikuj trend, supporty/rezistence a "Smart Money" zóny (Liquidity, Order Blocks).
-    2. **Technická Konfluence**: Hledej potvrzení nebo divergenci mezi RSI, MACD a ADX.
-    3. **Fundamentální Kontext**: Jak aktuální zprávy a fundamenty ovlivňují dlouhodobý směr?
-    4. **Risk Management**: Navrhni setup s precizním RR (Risk/Reward) poměrem.
+    ### ZÁVAZNÁ PRAVIDLA PRO ANALÝZU:
+    1. **Vážení Fundament vs. Technika**: Fundament má VŽDY vyšší váhu. Pokud jde technický signál (např. RSI nákup) proti silnému negativnímu fundamentu (např. špatné HDP), NESMÍŠ doporučit Long. V takovém případě musíš snížit skóre o 20 % a do analýzy vložit varování: "CONTRARIAN TRADE - HIGH RISK".
+    2. **Interpretace Trendu (ADX & SMA)**: 
+       - Pokud je ADX < 20, trh je v KONSOLIDACI (range). Nesmíš psát o silném trendu.
+       - Pokud je cena POD SMA 50 i SMA 200, trend je silně medvědí. Nákupní setup (Long) v této situaci vyžaduje extrémní potvrzení (např. silný fundament + RSI divergence).
+    3. **Confidence Score (Pravděpodobnost)**: Základní hladina je 50 %. Nad 65 % se setup dostane POUZE při souladu Techniky + Fundamentu + Momenta (ADX > 25). Buď konzervativní.
+    4. **Dynamické RRR**: Vyhledávej setupy s minimálním RRR 1:1.5 nebo 1:2. Pokud navrhneš RRR 1:1, musíš v obhajobě zdůraznit, že strategie vyžaduje extrémně vysokou úspěšnost (Win Rate).
+    5. **Ekonomická Logika**: Špatná makro data pro danou zemi (nezaměstnanost, HDP) znamenají TLAK NA OSLABENÍ měny. Nehalucinuj o "prostoru pro nákup" bez jasného fundamentálního důvodu (např. spekulace na pivot banky).
     
     ### VSTUPNÍ DATA:
     - TECHNICKÝ STAV: {tech_str}
@@ -857,7 +860,7 @@ def generate_analysis(ticker_symbol, df, fundamentals, news=None):
     - FUNDAMENTY: {fund_str}
     - ZPRÁVY: {news_str}
     
-    ### POŽADAVKY NA DETAILNÍ VÝSTUP (PŘÍSNĚ VALIDNÍ JSON V ČEŠTINĚ):
+    ### POŽADAVKY NA VÝSTUP (PŘÍSNĚ VALIDNÍ JSON V ČEŠTINĚ):
     {{
       "trade_setup": {{
         "direction": "Long / Short / Neutral",
@@ -866,13 +869,14 @@ def generate_analysis(ticker_symbol, df, fundamentals, news=None):
         "sl": "Hladina invalidace setupu",
         "rationale": "Důkladné 3-4 věty vysvětlující konfluenci indikátorů a price action."
       }},
-      "sentiment_score": Číslo od -100 (Extrémní Bearish) do 100 (Extrémní Bullish),
-      "technical_analysis": "Hloubkový rozbor trendu, volatility (BB) a síly (ADX). Hledej divergence. Minimálně 60 slov.",
-      "fundamental_analysis": "Analýza makro kontextu a vlivu zpráv na psychologii trhu. Minimálně 60 slov.",
-      "synthesis_and_defense": "PROČ JE TENTO SETUP PLATNÝ? Bojuj proti davu. Identifikuj pasti na retailové tradery. Jaká je pravděpodobnost úspěchu? Minimálně 80 slov."
+      "sentiment_score": Číslo od -100 (Bearish) do 100 (Bullish),
+      "confidence_pct": Číslo od 0 do 100 (Reálná pravděpodobnost úspěchu dle pravidel výše),
+      "technical_analysis": "Rozbor trendu (SMA), volatility (BB) a síly (ADX). Hledej divergence. Min 60 slov.",
+      "fundamental_analysis": "Analýza makro kontextu a vlivu zpráv. Musí odpovídat ekonomické logice! Min 60 slov.",
+      "synthesis_and_defense": "PROČ JE TENTO SETUP PLATNÝ? Identifikuj pasti na retail. Pokud je setup protitrendový, uveď 'CONTRARIAN TRADE - HIGH RISK'. Min 80 slov."
     }}
     
-    Odpovídej POUZE ve formátu JSON v českém jazyce. Buď kritický, nepředpovídej slepě, ale hledej důkazy v datech.
+    Odpovídej POUZE ve formátu JSON v českém jazyce.
     """
 
     try:
@@ -1248,6 +1252,9 @@ if st.session_state.current_page == "Dashboard":
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 20px; margin-top: 30px;">
                     <h2 style="margin:0; font-size: 1.4rem;">AI obchodní nápady</h2>
                     <span style="background: rgba(255,255,255,0.05); padding: 5px 12px; border-radius: 8px; font-weight:600; font-size:0.9rem; color:#00E676;">{ticker} • {st.session_state.tf_interval}</span>
+                        <div style="font-size: 0.8rem; color: #94A3B8; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px;">Confidence Score</div>
+                        <div style="font-size: 1.5rem; font-weight: 800; color: #38BDF8;">{ai_data.get('confidence_pct', 50)}%</div>
+                    </div>
                 </div>
             """, unsafe_allow_html=True)
 
