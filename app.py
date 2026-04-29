@@ -478,7 +478,14 @@ def calculate_indicators(df):
     if df.empty or len(df) < 20: 
         return df
         
+    if df.empty:
+        return df
+        
     df = df.copy()
+    
+    # Minimum data length check for complex indicators
+    if len(df) < 30:
+        return df
     
     # SMAs
     df['SMA_20'] = ta.trend.sma_indicator(df['Close'], window=20)
@@ -500,10 +507,15 @@ def calculate_indicators(df):
     df['MACD_Hist'] = indicator_macd.macd_diff()
     
     # ADX (Trend Strength)
-    indicator_adx = ta.trend.ADXIndicator(high=df['High'], low=df['Low'], close=df['Close'], window=14)
-    df['ADX'] = indicator_adx.adx()
-    df['DI_Plus'] = indicator_adx.adx_pos()
-    df['DI_Minus'] = indicator_adx.adx_neg()
+    try:
+        indicator_adx = ta.trend.ADXIndicator(high=df['High'], low=df['Low'], close=df['Close'], window=14)
+        df['ADX'] = indicator_adx.adx()
+        df['DI_Plus'] = indicator_adx.adx_pos()
+        df['DI_Minus'] = indicator_adx.adx_neg()
+    except Exception:
+        df['ADX'] = pd.Series([20] * len(df))
+        df['DI_Plus'] = pd.Series([0] * len(df))
+        df['DI_Minus'] = pd.Series([0] * len(df))
     
     return df
 
@@ -1120,7 +1132,7 @@ if st.session_state.current_page == "Dashboard":
                     """, unsafe_allow_html=True)
                 
                     if dxm_ticker != ticker:
-                        df_dxm = calculate_indicators(fetch_data(dxm_ticker, "1mo"))
+                        df_dxm = calculate_indicators(fetch_data(dxm_ticker, "3mo"))
                     else:
                         df_dxm = df_processed
                 
@@ -1135,7 +1147,7 @@ if st.session_state.current_page == "Dashboard":
                 # --- COT WIDGET ---
                 with st.container(border=True):
                     if cot_ticker != ticker:
-                        df_cot_base = calculate_indicators(fetch_data(cot_ticker, "1mo"))
+                        df_cot_base = calculate_indicators(fetch_data(cot_ticker, "3mo"))
                     else:
                         df_cot_base = df_processed
                 
