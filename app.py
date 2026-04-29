@@ -1248,14 +1248,14 @@ if st.session_state.current_page == "Dashboard":
                             """, unsafe_allow_html=True)
 
             # --- AI Generated Trade Ideas Header ---
-            ai_data = st.session_state.get('ai_analysis_data')
-            confidence_html = ""
-            if ai_data:
-                confidence_pct = ai_data.get('confidence_pct', 50)
-                confidence_html = f"""
+            ai_info = st.session_state.get('ai_analysis_data')
+            conf_html = ""
+            if ai_info:
+                c_pct = ai_info.get('confidence_pct', 50)
+                conf_html = f"""
                 <div style="text-align: right;">
                     <div style="font-size: 0.7rem; color: #94A3B8; text-transform: uppercase; letter-spacing: 1px;">Confidence</div>
-                    <div style="font-size: 1.3rem; font-weight: 800; color: #38BDF8;">{confidence_pct}%</div>
+                    <div style="font-size: 1.3rem; font-weight: 800; color: #38BDF8;">{c_pct}%</div>
                 </div>
                 """
 
@@ -1264,7 +1264,7 @@ if st.session_state.current_page == "Dashboard":
                     <h2 style="margin:0; font-size: 1.4rem;">AI obchodní nápady</h2>
                     <div style="display:flex; align-items:center; gap:20px;">
                         <span style="background: rgba(255,255,255,0.05); padding: 5px 12px; border-radius: 8px; font-weight:600; font-size:0.9rem; color:#00E676;">{ticker} • {st.session_state.tf_interval}</span>
-                        {confidence_html}
+                        {conf_html}
                     </div>
                 </div>
             """, unsafe_allow_html=True)
