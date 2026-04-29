@@ -1248,12 +1248,23 @@ if st.session_state.current_page == "Dashboard":
                             """, unsafe_allow_html=True)
 
             # --- AI Generated Trade Ideas Header ---
+            ai_data = st.session_state.get('ai_analysis_data')
+            confidence_html = ""
+            if ai_data:
+                confidence_pct = ai_data.get('confidence_pct', 50)
+                confidence_html = f"""
+                <div style="text-align: right;">
+                    <div style="font-size: 0.7rem; color: #94A3B8; text-transform: uppercase; letter-spacing: 1px;">Confidence</div>
+                    <div style="font-size: 1.3rem; font-weight: 800; color: #38BDF8;">{confidence_pct}%</div>
+                </div>
+                """
+
             st.markdown(f"""
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 20px; margin-top: 30px;">
                     <h2 style="margin:0; font-size: 1.4rem;">AI obchodní nápady</h2>
-                    <span style="background: rgba(255,255,255,0.05); padding: 5px 12px; border-radius: 8px; font-weight:600; font-size:0.9rem; color:#00E676;">{ticker} • {st.session_state.tf_interval}</span>
-                        <div style="font-size: 0.8rem; color: #94A3B8; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px;">Confidence Score</div>
-                        <div style="font-size: 1.5rem; font-weight: 800; color: #38BDF8;">{ai_data.get('confidence_pct', 50)}%</div>
+                    <div style="display:flex; align-items:center; gap:20px;">
+                        <span style="background: rgba(255,255,255,0.05); padding: 5px 12px; border-radius: 8px; font-weight:600; font-size:0.9rem; color:#00E676;">{ticker} • {st.session_state.tf_interval}</span>
+                        {confidence_html}
                     </div>
                 </div>
             """, unsafe_allow_html=True)
