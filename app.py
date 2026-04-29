@@ -816,42 +816,63 @@ def generate_analysis(ticker_symbol, df, fundamentals, news=None):
     
     # Summarize Technicals (Last available row)
     last_row = df.iloc[-1]
+    
+    # Get last 10 rows for Price Action context
+    recent_ohlc = df[['Open', 'High', 'Low', 'Close', 'Volume']].tail(10).to_string()
+    
     tech_str = f"""
-    Cena: {last_row.get('Close', 0):.2f}
-    RSI: {last_row.get('RSI', 0):.2f}
-    MACD: {last_row.get('MACD', 0):.2f} (Signal: {last_row.get('MACD_Signal', 0):.2f})
+    AKTUÁLNÍ HODNOTY:
+    Cena (Close): {last_row.get('Close', 0):.2f}
+    RSI (14): {last_row.get('RSI', 0):.2f}
+    MACD: {last_row.get('MACD', 0):.2f} (Signal: {last_row.get('MACD_Signal', 0):.2f}, Hist: {last_row.get('MACD_Hist', 0):.2f})
+    ADX (Trend Strength): {last_row.get('ADX', 0):.2f} (DI+: {last_row.get('DI_Plus', 0):.2f}, DI-: {last_row.get('DI_Minus', 0):.2f})
+    Bollinger Bands: High {last_row.get('BB_High', 0):.2f}, Low {last_row.get('BB_Low', 0):.2f}
     SMA 50: {last_row.get('SMA_50', 0):.2f}
     SMA 200: {last_row.get('SMA_200', 0):.2f}
+    
+    POSLEDNÍCH 10 SVÍČEK (PRICE ACTION):
+    {recent_ohlc}
     """
 
     news_str = ""
     if news:
-        news_str = "Zprávy:\n" + "\n".join([f"- {n['title']}" for n in news[:3]])
+        news_str = "HLAVNÍ ZPRÁVY Z TRHU:\n" + "\n".join([f"- {n['title']} (Zdroj: {n['publisher']})" for n in news[:5]])
+
+    # Calculate synthetic sentiment context
+    l_pct, s_pct = calculate_synthetic_sentiment(df)
+    sentiment_context = f"Syntetický sentiment (DXM/COT Model): {l_pct}% Long vs {s_pct}% Short"
 
     sys_prompt = f"""
-    Jsi expertní kvantitativní analytik a profesionální hedge-fund trader. Tvým úkolem je vytvořit rigorózní audit pro symbol {ticker_symbol}.
+    Jsi špičkový kvantitativní analytik pro institucionální hedge-fond. Tvým úkolem je provést nekompromisní RIGORÓZNÍ AUDIT instrumentu {ticker_symbol}.
     
-    ### DATA K ANALÝZE:
-    - Technický souhrn: {tech_str}
-    - Fundamenty: {fund_str}
-    - Zprávy: {news_str}
+    ### TVŮJ ANALYTICKÝ RÁMEC:
+    1. **Price Action & Struktura**: Identifikuj trend, supporty/rezistence a "Smart Money" zóny (Liquidity, Order Blocks).
+    2. **Technická Konfluence**: Hledej potvrzení nebo divergenci mezi RSI, MACD a ADX.
+    3. **Fundamentální Kontext**: Jak aktuální zprávy a fundamenty ovlivňují dlouhodobý směr?
+    4. **Risk Management**: Navrhni setup s precizním RR (Risk/Reward) poměrem.
+    
+    ### VSTUPNÍ DATA:
+    - TECHNICKÝ STAV: {tech_str}
+    - SENTIMENT TRHU: {sentiment_context}
+    - FUNDAMENTY: {fund_str}
+    - ZPRÁVY: {news_str}
     
     ### POŽADAVKY NA DETAILNÍ VÝSTUP (PŘÍSNĚ VALIDNÍ JSON V ČEŠTINĚ):
     {{
       "trade_setup": {{
         "direction": "Long / Short / Neutral",
-        "entry": "přesná cenová hladina",
-        "tp": "cílová hladina (Take Profit)",
-        "sl": "hladina pro výstup (Stop Loss)",
-        "rationale": "Důkladné 3-4 věty vysvětlující konkrétní logiku vstupu."
+        "entry": "Konkrétní cenová hladina nebo zóna",
+        "tp": "První a druhý cílový profit",
+        "sl": "Hladina invalidace setupu",
+        "rationale": "Důkladné 3-4 věty vysvětlující konfluenci indikátorů a price action."
       }},
-      "sentiment_score": číslo od -100 do 100,
-      "technical_analysis": "Detailní rozbor technické situace (trend, RSI, MACD divergence, supporty/rezistence). Minimálně 40 slov.",
-      "fundamental_analysis": "Hloubková analýza fundamentálního pozadí a makroekonomického kontextu pro tento symbol. Minimálně 40 slov.",
-      "synthesis_and_defense": "Závěrečná syntéza: Proč je tento obchodní setup pravděpodobnější než ostatní scénáře? Jaká jsou největší rizika? Minimálně 50 slov."
+      "sentiment_score": Číslo od -100 (Extrémní Bearish) do 100 (Extrémní Bullish),
+      "technical_analysis": "Hloubkový rozbor trendu, volatility (BB) a síly (ADX). Hledej divergence. Minimálně 60 slov.",
+      "fundamental_analysis": "Analýza makro kontextu a vlivu zpráv na psychologii trhu. Minimálně 60 slov.",
+      "synthesis_and_defense": "PROČ JE TENTO SETUP PLATNÝ? Bojuj proti davu. Identifikuj pasti na retailové tradery. Jaká je pravděpodobnost úspěchu? Minimálně 80 slov."
     }}
     
-    Odpovídej POUZE ve formátu JSON v češtině.
+    Odpovídej POUZE ve formátu JSON v českém jazyce. Buď kritický, nepředpovídej slepě, ale hledej důkazy v datech.
     """
 
     try:
