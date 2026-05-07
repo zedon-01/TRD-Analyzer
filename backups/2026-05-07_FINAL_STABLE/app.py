@@ -919,13 +919,13 @@ def generate_analysis(ticker_symbol, df, fundamentals, news=None):
     Jsi špičkový kvantitativní analytik pro institucionální hedge-fond. Tvým úkolem je provést nekompromisní RIGORÓZNÍ AUDIT instrumentu {ticker_symbol}.
     
     ### ZÁVAZNÁ PRAVIDLA PRO ANALÝZU:
-    1. **Kvalita nad kvantitu (NO TRADE ZÓNA)**: NESNAŽ se najít obchod za každou cenu. Pokud si indikátory protiřečí, pokud je slabý trend (ADX < 20) bez jasného odrazu, nebo pokud jdou fundamenty proti technice, MUSÍŠ zvolit směr "Wait" (Čekat). Trpělivost je znakem profesionála. Pokud zvolíš Wait, nevyplňuj Entry, TP ani SL.
-    2. **Vážení Fundament vs. Technika**: Fundament má VŽDY vyšší váhu. Pokud jde technický signál proti silnému fundamentu, nesmíš doporučit obchod po směru techniky.
-    3. **Interpretace Trendu (ADX & SMA)**: 
-       - Pokud je ADX < 20, trh je v KONSOLIDACI.
-       - Pokud je cena POD SMA 50 i SMA 200, trend je silně medvědí. Nákupní setup v této situaci vyžaduje extrémní potvrzení.
-    4. **Confidence Score (Pravděpodobnost)**: Základní hladina je 50 %. Nad 65 % se setup dostane POUZE při dokonalém souladu. Pokud doporučuješ "Wait", dej Confidence Score 0.
-    5. **Ekonomická Logika**: Špatná makro data znamenají TLAK NA OSLABENÍ. Nehalucinuj o nákupu bez fundamentálního důvodu.
+    1. **Vážení Fundament vs. Technika**: Fundament má VŽDY vyšší váhu. Pokud jde technický signál (např. RSI nákup) proti silnému negativnímu fundamentu (např. špatné HDP), NESMÍŠ doporučit Long. V takovém případě musíš snížit skóre o 20 % a do analýzy vložit varování: "CONTRARIAN TRADE - HIGH RISK".
+    2. **Interpretace Trendu (ADX & SMA)**: 
+       - Pokud je ADX < 20, trh je v KONSOLIDACI (range). Nesmíš psát o silném trendu.
+       - Pokud je cena POD SMA 50 i SMA 200, trend je silně medvědí. Nákupní setup (Long) v této situaci vyžaduje extrémní potvrzení (např. silný fundament + RSI divergence).
+    3. **Confidence Score (Pravděpodobnost)**: Základní hladina je 50 %. Nad 65 % se setup dostane POUZE při souladu Techniky + Fundamentu + Momenta (ADX > 25). Buď konzervativní.
+    4. **Dynamické RRR**: Vyhledávej setupy s minimálním RRR 1:1.5 nebo 1:2. Pokud navrhneš RRR 1:1, musíš v obhajobě zdůraznit, že strategie vyžaduje extrémně vysokou úspěšnost (Win Rate).
+    5. **Ekonomická Logika**: Špatná makro data pro danou zemi (nezaměstnanost, HDP) znamenají TLAK NA OSLABENÍ měny. Nehalucinuj o "prostoru pro nákup" bez jasného fundamentálního důvodu (např. spekulace na pivot banky).
     
     ### VSTUPNÍ DATA:
     - TECHNICKÝ STAV: {tech_str}
@@ -936,17 +936,17 @@ def generate_analysis(ticker_symbol, df, fundamentals, news=None):
     ### POŽADAVKY NA VÝSTUP (PŘÍSNĚ VALIDNÍ JSON V ČEŠTINĚ):
     {{
       "trade_setup": {{
-        "direction": "Long / Short / Wait",
-        "entry": "Konkrétní cenová hladina (Pokud Wait, napiš 'N/A')",
-        "tp": "První a druhý cílový profit (Pokud Wait, napiš 'N/A')",
-        "sl": "Hladina invalidace setupu (Pokud Wait, napiš 'N/A')",
-        "rationale": "Důkladné vysvětlení setupu, NEBO logické zdůvodnění proč se má čekat (Wait) a na jaký signál se čeká."
+        "direction": "Long / Short / Neutral",
+        "entry": "Konkrétní cenová hladina nebo zóna",
+        "tp": "První a druhý cílový profit",
+        "sl": "Hladina invalidace setupu",
+        "rationale": "Důkladné 3-4 věty vysvětlující konfluenci indikátorů a price action."
       }},
       "sentiment_score": Číslo od -100 (Bearish) do 100 (Bullish),
-      "confidence_pct": Číslo od 0 do 100,
-      "technical_analysis": "Rozbor trendu, volatility a síly. Min 60 slov.",
-      "fundamental_analysis": "Analýza makro kontextu a zpráv. Min 60 slov.",
-      "synthesis_and_defense": "PROČ JE TENTO SETUP PLATNÝ, NEBO PROČ SE MÁ ČEKAT? Min 80 slov."
+      "confidence_pct": Číslo od 0 do 100 (Reálná pravděpodobnost úspěchu dle pravidel výše),
+      "technical_analysis": "Rozbor trendu (SMA), volatility (BB) a síly (ADX). Hledej divergence. Min 60 slov.",
+      "fundamental_analysis": "Analýza makro kontextu a vlivu zpráv. Musí odpovídat ekonomické logice! Min 60 slov.",
+      "synthesis_and_defense": "PROČ JE TENTO SETUP PLATNÝ? Identifikuj pasti na retail. Pokud je setup protitrendový, uveď 'CONTRARIAN TRADE - HIGH RISK'. Min 80 slov."
     }}
     
     Odpovídej POUZE ve formátu JSON v českém jazyce.
@@ -1383,15 +1383,10 @@ if st.session_state.current_page == "Dashboard":
                         if direction is None:
                             direction = "N/A"
                         
-                        dir_upper = direction.upper()
-                        is_wait = "WAIT" in dir_upper or "NEUTRAL" in dir_upper or "N/A" in dir_upper
-                        
-                        if is_wait:
-                            st.markdown(f'<div style="display:flex; justify-content:space-between; padding: 10px 0; border-bottom: 1px solid #1E2129;"><span style="color:#94A3B8; font-size:0.9rem;">Direction Bias</span><span style="color:#F59E0B; font-weight:600;"><span class="pulse-dot" style="background-color:#F59E0B; box-shadow:0 0 8px #F59E0B;"></span>Wait (No Trade)</span></div><div style="padding: 20px 10px; text-align: center; color: #94A3B8; font-style: italic; line-height: 1.5;">Aktuální podmínky na trhu nejsou vhodné pro bezpečný vstup.<br>Čekejte na silnější signál.</div>', unsafe_allow_html=True)
-                        else:
-                            dir_class = "glow-long" if "LONG" in dir_upper else "glow-short" if "SHORT" in dir_upper else ""
-                            dot_class = "pulse-dot" if "LONG" in dir_upper else "pulse-dot short" if "SHORT" in dir_upper else "pulse-dot"
-                            st.markdown(f'<div style="display:flex; justify-content:space-between; padding: 10px 0; border-bottom: 1px solid #1E2129;"><span style="color:#94A3B8; font-size:0.9rem;">Direction Bias</span><span class="{dir_class}" style="font-weight:600;"><span class="{dot_class}"></span>{direction}</span></div><div style="display:flex; justify-content:space-between; padding: 10px 0; border-bottom: 1px solid #1E2129;"><span style="color:#94A3B8; font-size:0.9rem;">Entry Point</span><span style="font-weight:600;">{setup.get("entry", "N/A")}</span></div><div style="display:flex; justify-content:space-between; padding: 10px 0; border-bottom: 1px solid #1E2129;"><span style="color:#94A3B8; font-size:0.9rem;">Take Profit</span><span style="color:#00E676; font-weight:600;">{setup.get("tp", "N/A")}</span></div><div style="display:flex; justify-content:space-between; padding: 10px 0;"><span style="color:#94A3B8; font-size:0.9rem;">Stop Loss</span><span style="color:#F87171; font-weight:600;">{setup.get("sl", "N/A")}</span></div>', unsafe_allow_html=True)
+                        dir_class = "glow-long" if "Long" in direction else "glow-short" if "Short" in direction else ""
+                        dot_class = "pulse-dot" if "Long" in direction else "pulse-dot short" if "Short" in direction else "pulse-dot"
+
+                        st.markdown(f'<div style="display:flex; justify-content:space-between; padding: 10px 0; border-bottom: 1px solid #1E2129;"><span style="color:#94A3B8; font-size:0.9rem;">Direction Bias</span><span class="{dir_class}" style="font-weight:600;"><span class="{dot_class}"></span>{direction}</span></div><div style="display:flex; justify-content:space-between; padding: 10px 0; border-bottom: 1px solid #1E2129;"><span style="color:#94A3B8; font-size:0.9rem;">Entry Point</span><span style="font-weight:600;">{setup.get("entry", "N/A")}</span></div><div style="display:flex; justify-content:space-between; padding: 10px 0; border-bottom: 1px solid #1E2129;"><span style="color:#94A3B8; font-size:0.9rem;">Take Profit</span><span style="color:#00E676; font-weight:600;">{setup.get("tp", "N/A")}</span></div><div style="display:flex; justify-content:space-between; padding: 10px 0;"><span style="color:#94A3B8; font-size:0.9rem;">Stop Loss</span><span style="color:#F87171; font-weight:600;">{setup.get("sl", "N/A")}</span></div>', unsafe_allow_html=True)
 
                 st.markdown("<br>", unsafe_allow_html=True)
             

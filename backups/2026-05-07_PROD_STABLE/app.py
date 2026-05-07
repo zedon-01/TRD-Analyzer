@@ -349,72 +349,35 @@ try:
 except ImportError:
     import requests as curl_requests
 
-import random
-import time
-
 def get_yfinance_session():
-    """Create a session with curl_cffi and rotating user agents to avoid Yahoo's bot detection."""
+    """Create a session with curl_cffi to avoid Yahoo's bot detection."""
     session = curl_requests.Session()
-    
-    user_agents = [
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0',
-        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:122.0) Gecko/20100101 Firefox/122.0',
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Edge/120.0.0.0 Safari/537.36'
-    ]
-    
+    # No need to set User-Agent manually with curl_cffi usually, 
+    # but it doesn't hurt.
     session.headers.update({
-        'User-Agent': random.choice(user_agents),
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Connection': 'keep-alive',
-        'Upgrade-Insecure-Requests': '1',
-        'Sec-Fetch-Dest': 'document',
-        'Sec-Fetch-Mode': 'navigate',
-        'Sec-Fetch-Site': 'none',
-        'Sec-Fetch-User': '?1',
-        'Cache-Control': 'max-age=0',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
     })
     return session
 
 @st.cache_data(show_spinner="Načítám historická data...", ttl=300)
 def fetch_data(ticker_symbol, period, interval="1d"):
-    """Fetches historical market data with robust fallback mechanisms."""
+    """Fetches historical market data with interval support and custom session."""
+    session = get_yfinance_session()
+    ticker = yf.Ticker(ticker_symbol, session=session)
     try:
-        # Method 1: Ticker with custom session
-        session = get_yfinance_session()
-        ticker = yf.Ticker(ticker_symbol, session=session)
-        df = ticker.history(period=period, interval=interval)
-        
-        if not df.empty:
-            df.index = df.index.tz_localize(None)
-            return df
-            
-    except Exception as e:
-        pass # Fallback to method 2
-        
-    try:
-        # Method 2: yf.download (often bypasses some restrictions)
-        time.sleep(1) # Small delay before retry
-        df = yf.download(tickers=ticker_symbol, period=period, interval=interval, progress=False)
-        if not df.empty:
-            # yf.download sometimes returns MultiIndex columns if multiple tickers, 
-            # but for single ticker it returns normal columns. Let's ensure it's flat.
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.droplevel(1)
-            df.index = df.index.tz_localize(None)
-            return df
-            
+        # Simple retry logic
+        for _ in range(2):
+            df = ticker.history(period=period, interval=interval)
+            if not df.empty:
+                df.index = df.index.tz_localize(None)
+                return df
+        return pd.DataFrame()
     except Exception as e:
         if "Rate limited" in str(e) or "429" in str(e):
-            st.warning(f"📡 Yahoo Finance dočasně omezilo přístup (Rate Limit). Zkuste to prosím za chvíli.")
+            st.warning(f"📡 Yahoo Finance dočasně omezilo přístup (Rate Limit). Zkouším znovu...")
         else:
             st.error(f"Chyba při stahování dat pro ticker {ticker_symbol}: {e}")
-        
-    return pd.DataFrame()
+        return pd.DataFrame()
 
 @st.cache_data(show_spinner="Načítám fundamentální data...", ttl=3600)
 def fetch_fundamentals(ticker_symbol):
@@ -775,62 +738,27 @@ def plot_chart(df, ticker_symbol, config=None):
     return fig
 
 def plot_dxm_chart(df):
-    """Creates a clean ADX Bar Chart colored by trend direction."""
-    df_mini = df.tail(14).copy()
-    
+    """Creates a stylized mini-chart for Directional Movement (DXM) with Neon Glow."""
+    df_mini = df.tail(14)
     fig = go.Figure()
     
-    colors = []
-    for _, row in df_mini.iterrows():
-        if row['ADX'] < 20:
-            colors.append('#475569') # Grey for ranging
-        elif row['DI_Plus'] > row['DI_Minus']:
-            colors.append('#10B981') # Green for Up
-        else:
-            colors.append('#EF4444') # Red for Down
-            
-    fig.add_trace(go.Bar(
-        x=df_mini.index, 
-        y=df_mini['ADX'], 
-        marker_color=colors,
-        name='ADX (Síla Trendu)',
-        marker_line_width=0
-    ))
+    # Neon Glow effects using multiple lines with varying opacity
+    fig.add_trace(go.Scatter(x=df_mini.index, y=df_mini['DI_Plus'], mode='lines', line=dict(color='rgba(16, 185, 129, 0.2)', width=8), hoverinfo='skip'))
+    fig.add_trace(go.Scatter(x=df_mini.index, y=df_mini['DI_Plus'], mode='lines+markers', name='Long', line=dict(color='#10B981', width=3), marker=dict(size=6, color="#14161C", line=dict(width=2, color="#10B981"))))
     
-    # 20 threshold line for trend confirmation
-    fig.add_hline(y=20, line_dash="dash", line_color="rgba(255, 255, 255, 0.2)")
-
-    # Dynamic y-axis range
-    max_val = max(df_mini['ADX'].max() + 5, 40)
-
+    fig.add_trace(go.Scatter(x=df_mini.index, y=df_mini['DI_Minus'], mode='lines', line=dict(color='rgba(239, 68, 68, 0.2)', width=8), hoverinfo='skip'))
+    fig.add_trace(go.Scatter(x=df_mini.index, y=df_mini['DI_Minus'], mode='lines+markers', name='Short', line=dict(color='#EF4444', width=3), marker=dict(size=6, color="#14161C", line=dict(width=2, color="#EF4444"))))
+    
     fig.update_layout(
-        margin=dict(l=0, r=0, t=5, b=0),
-        height=100,
+        margin=dict(l=0, r=0, t=10, b=0),
+        height=150,
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
         showlegend=False,
-        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-        yaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.05)", zeroline=True, zerolinecolor="rgba(255,255,255,0.1)", showticklabels=True, range=[0, max_val]),
+        xaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.05)", zeroline=False, showticklabels=True),
+        yaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.05)", zeroline=False, showticklabels=True, range=[0, 100]),
         font=dict(family="Inter, sans-serif", color="#94A3B8", size=10)
     )
-    
-    # Current status for header
-    last_row = df_mini.iloc[-1]
-    if last_row['ADX'] > 25:
-        status_text = "UP TREND" if last_row['DI_Plus'] > last_row['DI_Minus'] else "DOWN TREND"
-        status_color = "#10B981" if last_row['DI_Plus'] > last_row['DI_Minus'] else "#EF4444"
-        icon = "🔥" if last_row['ADX'] > 35 else ("🟢" if status_color == "#10B981" else "🔴")
-    elif last_row['ADX'] >= 20:
-        status_text = "SLÁBNOUCÍ TREND"
-        status_color = "#FBBF24"
-        icon = "⚠️"
-    else:
-        status_text = "RANGING (Bez trendu)"
-        status_color = "#94A3B8"
-        icon = "⚖️"
-        
-    status_html = f'<span style="color:{status_color}; font-weight:700; font-size:0.75rem;">{icon} {status_text}</span>'
-    
-    return fig, status_html
+    return fig
 
 def plot_cot_gauge(title, long_pct, short_pct):
     """Creates a circular Donut chart for COT with Percentage Label."""
@@ -919,13 +847,13 @@ def generate_analysis(ticker_symbol, df, fundamentals, news=None):
     Jsi špičkový kvantitativní analytik pro institucionální hedge-fond. Tvým úkolem je provést nekompromisní RIGORÓZNÍ AUDIT instrumentu {ticker_symbol}.
     
     ### ZÁVAZNÁ PRAVIDLA PRO ANALÝZU:
-    1. **Kvalita nad kvantitu (NO TRADE ZÓNA)**: NESNAŽ se najít obchod za každou cenu. Pokud si indikátory protiřečí, pokud je slabý trend (ADX < 20) bez jasného odrazu, nebo pokud jdou fundamenty proti technice, MUSÍŠ zvolit směr "Wait" (Čekat). Trpělivost je znakem profesionála. Pokud zvolíš Wait, nevyplňuj Entry, TP ani SL.
-    2. **Vážení Fundament vs. Technika**: Fundament má VŽDY vyšší váhu. Pokud jde technický signál proti silnému fundamentu, nesmíš doporučit obchod po směru techniky.
-    3. **Interpretace Trendu (ADX & SMA)**: 
-       - Pokud je ADX < 20, trh je v KONSOLIDACI.
-       - Pokud je cena POD SMA 50 i SMA 200, trend je silně medvědí. Nákupní setup v této situaci vyžaduje extrémní potvrzení.
-    4. **Confidence Score (Pravděpodobnost)**: Základní hladina je 50 %. Nad 65 % se setup dostane POUZE při dokonalém souladu. Pokud doporučuješ "Wait", dej Confidence Score 0.
-    5. **Ekonomická Logika**: Špatná makro data znamenají TLAK NA OSLABENÍ. Nehalucinuj o nákupu bez fundamentálního důvodu.
+    1. **Vážení Fundament vs. Technika**: Fundament má VŽDY vyšší váhu. Pokud jde technický signál (např. RSI nákup) proti silnému negativnímu fundamentu (např. špatné HDP), NESMÍŠ doporučit Long. V takovém případě musíš snížit skóre o 20 % a do analýzy vložit varování: "CONTRARIAN TRADE - HIGH RISK".
+    2. **Interpretace Trendu (ADX & SMA)**: 
+       - Pokud je ADX < 20, trh je v KONSOLIDACI (range). Nesmíš psát o silném trendu.
+       - Pokud je cena POD SMA 50 i SMA 200, trend je silně medvědí. Nákupní setup (Long) v této situaci vyžaduje extrémní potvrzení (např. silný fundament + RSI divergence).
+    3. **Confidence Score (Pravděpodobnost)**: Základní hladina je 50 %. Nad 65 % se setup dostane POUZE při souladu Techniky + Fundamentu + Momenta (ADX > 25). Buď konzervativní.
+    4. **Dynamické RRR**: Vyhledávej setupy s minimálním RRR 1:1.5 nebo 1:2. Pokud navrhneš RRR 1:1, musíš v obhajobě zdůraznit, že strategie vyžaduje extrémně vysokou úspěšnost (Win Rate).
+    5. **Ekonomická Logika**: Špatná makro data pro danou zemi (nezaměstnanost, HDP) znamenají TLAK NA OSLABENÍ měny. Nehalucinuj o "prostoru pro nákup" bez jasného fundamentálního důvodu (např. spekulace na pivot banky).
     
     ### VSTUPNÍ DATA:
     - TECHNICKÝ STAV: {tech_str}
@@ -936,17 +864,17 @@ def generate_analysis(ticker_symbol, df, fundamentals, news=None):
     ### POŽADAVKY NA VÝSTUP (PŘÍSNĚ VALIDNÍ JSON V ČEŠTINĚ):
     {{
       "trade_setup": {{
-        "direction": "Long / Short / Wait",
-        "entry": "Konkrétní cenová hladina (Pokud Wait, napiš 'N/A')",
-        "tp": "První a druhý cílový profit (Pokud Wait, napiš 'N/A')",
-        "sl": "Hladina invalidace setupu (Pokud Wait, napiš 'N/A')",
-        "rationale": "Důkladné vysvětlení setupu, NEBO logické zdůvodnění proč se má čekat (Wait) a na jaký signál se čeká."
+        "direction": "Long / Short / Neutral",
+        "entry": "Konkrétní cenová hladina nebo zóna",
+        "tp": "První a druhý cílový profit",
+        "sl": "Hladina invalidace setupu",
+        "rationale": "Důkladné 3-4 věty vysvětlující konfluenci indikátorů a price action."
       }},
       "sentiment_score": Číslo od -100 (Bearish) do 100 (Bullish),
-      "confidence_pct": Číslo od 0 do 100,
-      "technical_analysis": "Rozbor trendu, volatility a síly. Min 60 slov.",
-      "fundamental_analysis": "Analýza makro kontextu a zpráv. Min 60 slov.",
-      "synthesis_and_defense": "PROČ JE TENTO SETUP PLATNÝ, NEBO PROČ SE MÁ ČEKAT? Min 80 slov."
+      "confidence_pct": Číslo od 0 do 100 (Reálná pravděpodobnost úspěchu dle pravidel výše),
+      "technical_analysis": "Rozbor trendu (SMA), volatility (BB) a síly (ADX). Hledej divergence. Min 60 slov.",
+      "fundamental_analysis": "Analýza makro kontextu a vlivu zpráv. Musí odpovídat ekonomické logice! Min 60 slov.",
+      "synthesis_and_defense": "PROČ JE TENTO SETUP PLATNÝ? Identifikuj pasti na retail. Pokud je setup protitrendový, uveď 'CONTRARIAN TRADE - HIGH RISK'. Min 80 slov."
     }}
     
     Odpovídej POUZE ve formátu JSON v českém jazyce.
@@ -1187,18 +1115,18 @@ if st.session_state.current_page == "Dashboard":
             with kpi_col2:
                 # --- DXM WIDGET ---
                 with st.container(border=True):
+                    st.markdown(f'<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 5px;"><h3 style="margin:0; font-size: 1.2rem;">DXM</h3><div style="font-size: 0.8rem;"><span style="color:#EF4444;">🔴 Short</span> &nbsp;&nbsp; <span style="color:#10B981;">🟢 Long</span></div></div>', unsafe_allow_html=True)
+                
                     if dxm_ticker != ticker:
                         df_dxm = calculate_indicators(fetch_data(dxm_ticker, "3mo"))
                     else:
                         df_dxm = df_processed
                 
                     if not df_dxm.empty and 'DI_Plus' in df_dxm.columns:
-                        fig_dxm, status_html = plot_dxm_chart(df_dxm)
-                        st.markdown(f'<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 5px;"><h3 style="margin:0; font-size: 1.2rem;">DXM</h3><div style="font-size: 0.8rem;">{status_html}</div></div>', unsafe_allow_html=True)
+                        fig_dxm = plot_dxm_chart(df_dxm)
                         fig_dxm.update_layout(height=110, margin=dict(l=0, r=0, t=0, b=0))
                         st.plotly_chart(fig_dxm, use_container_width=True, config={'displayModeBar': False})
                     else:
-                        st.markdown(f'<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 5px;"><h3 style="margin:0; font-size: 1.2rem;">DXM</h3></div>', unsafe_allow_html=True)
                         st.warning("Data pro DXM nejsou k dispozici.")
 
             with kpi_col3:
@@ -1326,17 +1254,6 @@ if st.session_state.current_page == "Dashboard":
             current_context = f"{ticker}_{st.session_state.tf_interval}"
             if st.session_state.ai_analysis_data and st.session_state.current_analysis_ticker == current_context:
                 ai_data = st.session_state.ai_analysis_data
-                
-                # Robustness check: Ensure ai_data is a dictionary
-                if isinstance(ai_data, str):
-                    try:
-                        import json
-                        ai_data = json.loads(ai_data)
-                    except Exception:
-                        ai_data = {}
-                if not isinstance(ai_data, dict):
-                    ai_data = {}
-                    
                 sub_col1, sub_col2 = st.columns([1, 1], gap="medium")
             
                 with sub_col1:
@@ -1383,15 +1300,10 @@ if st.session_state.current_page == "Dashboard":
                         if direction is None:
                             direction = "N/A"
                         
-                        dir_upper = direction.upper()
-                        is_wait = "WAIT" in dir_upper or "NEUTRAL" in dir_upper or "N/A" in dir_upper
-                        
-                        if is_wait:
-                            st.markdown(f'<div style="display:flex; justify-content:space-between; padding: 10px 0; border-bottom: 1px solid #1E2129;"><span style="color:#94A3B8; font-size:0.9rem;">Direction Bias</span><span style="color:#F59E0B; font-weight:600;"><span class="pulse-dot" style="background-color:#F59E0B; box-shadow:0 0 8px #F59E0B;"></span>Wait (No Trade)</span></div><div style="padding: 20px 10px; text-align: center; color: #94A3B8; font-style: italic; line-height: 1.5;">Aktuální podmínky na trhu nejsou vhodné pro bezpečný vstup.<br>Čekejte na silnější signál.</div>', unsafe_allow_html=True)
-                        else:
-                            dir_class = "glow-long" if "LONG" in dir_upper else "glow-short" if "SHORT" in dir_upper else ""
-                            dot_class = "pulse-dot" if "LONG" in dir_upper else "pulse-dot short" if "SHORT" in dir_upper else "pulse-dot"
-                            st.markdown(f'<div style="display:flex; justify-content:space-between; padding: 10px 0; border-bottom: 1px solid #1E2129;"><span style="color:#94A3B8; font-size:0.9rem;">Direction Bias</span><span class="{dir_class}" style="font-weight:600;"><span class="{dot_class}"></span>{direction}</span></div><div style="display:flex; justify-content:space-between; padding: 10px 0; border-bottom: 1px solid #1E2129;"><span style="color:#94A3B8; font-size:0.9rem;">Entry Point</span><span style="font-weight:600;">{setup.get("entry", "N/A")}</span></div><div style="display:flex; justify-content:space-between; padding: 10px 0; border-bottom: 1px solid #1E2129;"><span style="color:#94A3B8; font-size:0.9rem;">Take Profit</span><span style="color:#00E676; font-weight:600;">{setup.get("tp", "N/A")}</span></div><div style="display:flex; justify-content:space-between; padding: 10px 0;"><span style="color:#94A3B8; font-size:0.9rem;">Stop Loss</span><span style="color:#F87171; font-weight:600;">{setup.get("sl", "N/A")}</span></div>', unsafe_allow_html=True)
+                        dir_class = "glow-long" if "Long" in direction else "glow-short" if "Short" in direction else ""
+                        dot_class = "pulse-dot" if "Long" in direction else "pulse-dot short" if "Short" in direction else "pulse-dot"
+
+                        st.markdown(f'<div style="display:flex; justify-content:space-between; padding: 10px 0; border-bottom: 1px solid #1E2129;"><span style="color:#94A3B8; font-size:0.9rem;">Direction Bias</span><span class="{dir_class}" style="font-weight:600;"><span class="{dot_class}"></span>{direction}</span></div><div style="display:flex; justify-content:space-between; padding: 10px 0; border-bottom: 1px solid #1E2129;"><span style="color:#94A3B8; font-size:0.9rem;">Entry Point</span><span style="font-weight:600;">{setup.get("entry", "N/A")}</span></div><div style="display:flex; justify-content:space-between; padding: 10px 0; border-bottom: 1px solid #1E2129;"><span style="color:#94A3B8; font-size:0.9rem;">Take Profit</span><span style="color:#00E676; font-weight:600;">{setup.get("tp", "N/A")}</span></div><div style="display:flex; justify-content:space-between; padding: 10px 0;"><span style="color:#94A3B8; font-size:0.9rem;">Stop Loss</span><span style="color:#F87171; font-weight:600;">{setup.get("sl", "N/A")}</span></div>', unsafe_allow_html=True)
 
                 st.markdown("<br>", unsafe_allow_html=True)
             
