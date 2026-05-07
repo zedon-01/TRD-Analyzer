@@ -303,6 +303,7 @@ html, body, [class*="css"] {
     0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4); }
     70% { box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
     100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+}
 .glow-long { color: #10B981; text-shadow: 0 0 10px rgba(16, 185, 129, 0.4); }
 .glow-short { color: #EF4444; text-shadow: 0 0 10px rgba(239, 68, 68, 0.4); }
 
@@ -348,35 +349,72 @@ try:
 except ImportError:
     import requests as curl_requests
 
+import random
+import time
+
 def get_yfinance_session():
-    """Create a session with curl_cffi to avoid Yahoo's bot detection."""
+    """Create a session with curl_cffi and rotating user agents to avoid Yahoo's bot detection."""
     session = curl_requests.Session()
-    # No need to set User-Agent manually with curl_cffi usually, 
-    # but it doesn't hurt.
+    
+    user_agents = [
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:122.0) Gecko/20100101 Firefox/122.0',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Edge/120.0.0.0 Safari/537.36'
+    ]
+    
     session.headers.update({
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        'User-Agent': random.choice(user_agents),
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Sec-Fetch-User': '?1',
+        'Cache-Control': 'max-age=0',
     })
     return session
 
 @st.cache_data(show_spinner="Načítám historická data...", ttl=300)
 def fetch_data(ticker_symbol, period, interval="1d"):
-    """Fetches historical market data with interval support and custom session."""
-    session = get_yfinance_session()
-    ticker = yf.Ticker(ticker_symbol, session=session)
+    """Fetches historical market data with robust fallback mechanisms."""
     try:
-        # Simple retry logic
-        for _ in range(2):
-            df = ticker.history(period=period, interval=interval)
-            if not df.empty:
-                df.index = df.index.tz_localize(None)
-                return df
-        return pd.DataFrame()
+        # Method 1: Ticker with custom session
+        session = get_yfinance_session()
+        ticker = yf.Ticker(ticker_symbol, session=session)
+        df = ticker.history(period=period, interval=interval)
+        
+        if not df.empty:
+            df.index = df.index.tz_localize(None)
+            return df
+            
+    except Exception as e:
+        pass # Fallback to method 2
+        
+    try:
+        # Method 2: yf.download (often bypasses some restrictions)
+        time.sleep(1) # Small delay before retry
+        df = yf.download(tickers=ticker_symbol, period=period, interval=interval, progress=False)
+        if not df.empty:
+            # yf.download sometimes returns MultiIndex columns if multiple tickers, 
+            # but for single ticker it returns normal columns. Let's ensure it's flat.
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.droplevel(1)
+            df.index = df.index.tz_localize(None)
+            return df
+            
     except Exception as e:
         if "Rate limited" in str(e) or "429" in str(e):
-            st.warning(f"📡 Yahoo Finance dočasně omezilo přístup (Rate Limit). Zkouším znovu...")
+            st.warning(f"📡 Yahoo Finance dočasně omezilo přístup (Rate Limit). Zkuste to prosím za chvíli.")
         else:
             st.error(f"Chyba při stahování dat pro ticker {ticker_symbol}: {e}")
-        return pd.DataFrame()
+        
+    return pd.DataFrame()
 
 @st.cache_data(show_spinner="Načítám fundamentální data...", ttl=3600)
 def fetch_fundamentals(ticker_symbol):
@@ -737,24 +775,68 @@ def plot_chart(df, ticker_symbol, config=None):
     return fig
 
 def plot_dxm_chart(df):
-    """Creates a stylized mini-chart for Directional Movement (DXM) with Neon Glow."""
-    df_mini = df.tail(14)
+    """Creates a highly readable DXM Oscillator (DI+ - DI-) with ADX strength."""
+    df_mini = df.tail(14).copy()
+    
+    # Calculate the spread (Bulls vs Bears)
+    df_mini['DXM_Spread'] = df_mini['DI_Plus'] - df_mini['DI_Minus']
+    
     fig = go.Figure()
     
-    # Neon Glow effects using multiple lines with varying opacity
-    fig.add_trace(go.Scatter(x=df_mini.index, y=df_mini['DI_Plus'], mode='lines', line=dict(color='rgba(16, 185, 129, 0.2)', width=8), hoverinfo='skip'))
-    fig.add_trace(go.Scatter(x=df_mini.index, y=df_mini['DI_Plus'], mode='lines+markers', name='Long', line=dict(color='#10B981', width=3), marker=dict(size=6, color="#14161C", line=dict(width=2, color="#10B981"))))
+    # Colors for bars based on who is in control
+    colors = ['#10B981' if val >= 0 else '#EF4444' for val in df_mini['DXM_Spread']]
     
-    fig.add_trace(go.Scatter(x=df_mini.index, y=df_mini['DI_Minus'], mode='lines', line=dict(color='rgba(239, 68, 68, 0.2)', width=8), hoverinfo='skip'))
-    fig.add_trace(go.Scatter(x=df_mini.index, y=df_mini['DI_Minus'], mode='lines+markers', name='Short', line=dict(color='#EF4444', width=3), marker=dict(size=6, color="#14161C", line=dict(width=2, color="#EF4444"))))
+    # Bar chart for the spread
+    fig.add_trace(go.Bar(
+        x=df_mini.index, 
+        y=df_mini['DXM_Spread'], 
+        marker_color=colors,
+        name='Převaha (Long/Short)'
+    ))
     
+    # ADX Line to show trend strength
+    fig.add_trace(go.Scatter(
+        x=df_mini.index, 
+        y=df_mini['ADX'], 
+        mode='lines', 
+        name='ADX (Síla)', 
+        line=dict(color='#FBBF24', width=2, dash='dot')
+    ))
+    
+    # Highlight the ADX threshold (25)
+    fig.add_hline(y=25, line_dash="dash", line_color="rgba(251, 191, 36, 0.4)")
+    fig.add_hline(y=0, line_width=1, line_color="rgba(255, 255, 255, 0.2)")
+
+    # Current status text for immediate readability
+    last_spread = df_mini['DXM_Spread'].iloc[-1]
+    last_adx = df_mini['ADX'].iloc[-1]
+    
+    if last_adx > 25:
+        status_text = "🔥 SILNÝ UP TREND" if last_spread > 0 else "🩸 SILNÝ DOWN TREND"
+        status_color = "#10B981" if last_spread > 0 else "#EF4444"
+    else:
+        status_text = "⚖️ SLABÝ TRH (Ranging)"
+        status_color = "#94A3B8"
+
+    fig.add_annotation(
+        text=f"<b>{status_text}</b>",
+        xref="paper", yref="paper",
+        x=0.02, y=0.98,
+        showarrow=False,
+        font=dict(size=11, color=status_color, family="Inter, sans-serif")
+    )
+
+    # Dynamic y-axis range
+    max_val = max(df_mini['DXM_Spread'].abs().max(), df_mini['ADX'].max())
+    max_val = max(max_val + 5, 30) # Ensure at least 30 to show the 25 threshold clearly
+
     fig.update_layout(
         margin=dict(l=0, r=0, t=10, b=0),
         height=150,
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
         showlegend=False,
         xaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.05)", zeroline=False, showticklabels=True),
-        yaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.05)", zeroline=False, showticklabels=True, range=[0, 100]),
+        yaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.05)", zeroline=True, zerolinecolor="rgba(255,255,255,0.1)", showticklabels=True, range=[-max_val, max_val]),
         font=dict(family="Inter, sans-serif", color="#94A3B8", size=10)
     )
     return fig
@@ -988,13 +1070,7 @@ with st.sidebar:
     """, unsafe_allow_html=True)
 
     with st.expander("📚 Vysvětlivky pojmů", expanded=True):
-        st.markdown("""
-        <div style="font-size:0.85rem; color:#94A3B8;">
-        <b>Score:</b> AI ohodnocení situace od -100 do 100.<br><br>
-        <b>DXM:</b> Měří tržní sílu. <span style="color:#10B981;">Zelená</span> = Nákupy, <span style="color:#EF4444;">Červená</span> = Prodeje.<br><br>
-        <b>COT:</b> Commitment of Traders. Ukazuje naklonění kapitálu institucí.
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown('<div style="font-size:0.85rem; color:#94A3B8;"><b>Score:</b> AI ohodnocení situace od -100 do 100.<br><br><b>DXM:</b> Měří tržní sílu. <span style="color:#10B981;">Zelená</span> = Nákupy, <span style="color:#EF4444;">Červená</span> = Prodeje.<br><br><b>COT:</b> Commitment of Traders. Ukazuje naklonění kapitálu institucí.</div>', unsafe_allow_html=True)
 
     # --- Sidebar Navigation ---
     st.markdown("### 🧭 Navigace")
@@ -1068,17 +1144,7 @@ if st.session_state.current_page == "Dashboard":
     # 1. Dashboard Header & Health Status
     col_status1, col_status2 = st.columns([0.65, 0.35])
     with col_status1:
-        st.markdown(f"""
-            <div style="display:flex; align-items:baseline; gap: 15px; margin-bottom: 5px;">
-                <h1 style="margin:0; padding:0; line-height: 1; font-size: 2.2rem;">Dashboard</h1>
-                <span style="color:#94A3B8; font-size: 0.9rem;">v3.1 Master</span>
-            </div>
-            <div style="display:flex; gap: 15px; margin-bottom: 20px;">
-                <span style="color:#10B981; font-size:0.75rem;"><span class="pulse-dot"></span> System Online</span>
-                <span style="color:#38BDF8; font-size:0.75rem;">● Data Feed: OK</span>
-                <span style="color:{'#10B981' if (get_api_credentials()[0] and len(get_api_credentials()[0]) > 5) else '#EF4444'}; font-size:0.75rem;">● AI Engine: {'Online' if (get_api_credentials()[0] and len(get_api_credentials()[0]) > 5) else 'Offline'}</span>
-            </div>
-        """, unsafe_allow_html=True)
+        st.markdown(f'<div style="display:flex; align-items:baseline; gap: 15px; margin-bottom: 5px;"><h1 style="margin:0; padding:0; line-height: 1; font-size: 2.2rem;">Dashboard</h1><span style="color:#94A3B8; font-size: 0.9rem;">v3.1 Master</span></div><div style="display:flex; gap: 15px; margin-bottom: 20px;"><span style="color:#10B981; font-size:0.75rem;"><span class="pulse-dot"></span> System Online</span><span style="color:#38BDF8; font-size:0.75rem;">● Data Feed: OK</span><span style="color:{"#10B981" if (get_api_credentials()[0] and len(get_api_credentials()[0]) > 5) else "#EF4444"}; font-size:0.75rem;">● AI Engine: {"Online" if (get_api_credentials()[0] and len(get_api_credentials()[0]) > 5) else "Offline"}</span></div>', unsafe_allow_html=True)
 
     with col_status2:
         # Dynamický výpočet časů (NYC, LON, TOK)
@@ -1087,13 +1153,7 @@ if st.session_state.current_page == "Dashboard":
         lon_time = utc_now.astimezone(pytz.timezone('Europe/London')).strftime('%H:%M')
         tok_time = utc_now.astimezone(pytz.timezone('Asia/Tokyo')).strftime('%H:%M')
     
-        st.markdown(f"""
-            <div style="text-align: right; margin-top: 10px; display: flex; justify-content: flex-end; gap: 8px;">
-                <div class="time-badge">NYC <b>{ny_time}</b></div>
-                <div class="time-badge">LON <b>{lon_time}</b></div>
-                <div class="time-badge">TOK <b>{tok_time}</b></div>
-            </div>
-        """, unsafe_allow_html=True)
+        st.markdown(f'<div style="text-align: right; margin-top: 10px; display: flex; justify-content: flex-end; gap: 8px;"><div class="time-badge">NYC <b>{ny_time}</b></div><div class="time-badge">LON <b>{lon_time}</b></div><div class="time-badge">TOK <b>{tok_time}</b></div></div>', unsafe_allow_html=True)
 
     # 2. Main Grid Layout Data Fetch
     if ticker:
@@ -1131,30 +1191,12 @@ if st.session_state.current_page == "Dashboard":
                         price_fmt = f"${current_price:,.6f}"
                         change_fmt = f"${abs(price_change):.6f}"
 
-                    st.markdown(f"""
-                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 10px;">
-                        <h3 style='margin:0; font-size: 1.2rem;'>Cena aktiva</h3>
-                        <div style="font-size: 0.8rem; color:#94A3B8;">{ticker}</div>
-                    </div>
-                    <div style="padding: 6px 0;">
-                        <div style="font-size: 2.2rem; font-weight: 700; color: #F8FAFC; line-height: 1.1;">
-                            {price_fmt}
-                        </div>
-                        <div style="font-size: 1.0rem; color: {color}; font-weight: 600; margin-top: 5px;">
-                            {arrow} {change_fmt} ({abs(pct_change):.2f}%)
-                        </div>
-                    </div>
-                    """, unsafe_allow_html=True)
+                    st.markdown(f'<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 10px;"><h3 style="margin:0; font-size: 1.2rem;">Cena aktiva</h3><div style="font-size: 0.8rem; color:#94A3B8;">{ticker}</div></div><div style="padding: 6px 0;"><div style="font-size: 2.2rem; font-weight: 700; color: #F8FAFC; line-height: 1.1;">{price_fmt}</div><div style="font-size: 1.0rem; color: {color}; font-weight: 600; margin-top: 5px;">{arrow} {change_fmt} ({abs(pct_change):.2f}%)</div></div>', unsafe_allow_html=True)
 
             with kpi_col2:
                 # --- DXM WIDGET ---
                 with st.container(border=True):
-                    st.markdown(f"""
-                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 5px;">
-                        <h3 style='margin:0; font-size: 1.2rem;'>DXM</h3>
-                        <div style="font-size: 0.8rem;"><span style="color:#EF4444;">🔴 Short</span> &nbsp;&nbsp; <span style="color:#10B981;">🟢 Long</span></div>
-                    </div>
-                    """, unsafe_allow_html=True)
+                    st.markdown(f'<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 5px;"><h3 style="margin:0; font-size: 1.2rem;">DXM</h3><div style="font-size: 0.8rem;"><span style="color:#EF4444;">🔴 Short</span> &nbsp;&nbsp; <span style="color:#10B981;">🟢 Long</span></div></div>', unsafe_allow_html=True)
                 
                     if dxm_ticker != ticker:
                         df_dxm = calculate_indicators(fetch_data(dxm_ticker, "3mo"))
@@ -1179,15 +1221,7 @@ if st.session_state.current_page == "Dashboard":
                     if not df_cot_base.empty:
                         synth_long_pct, synth_short_pct = calculate_synthetic_sentiment(df_cot_base)
                     
-                        st.markdown(f"""
-                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 0px;">
-                            <h3 style='margin:0; font-size: 1.2rem;'>COT</h3>
-                            <div style="font-size: 0.8rem;">
-                                <span style="color:#10B981;">🟢 {synth_long_pct}%</span> &nbsp;&nbsp;
-                                <span style="color:#EF4444;">🔴 {synth_short_pct}%</span>
-                            </div>
-                        </div>
-                        """, unsafe_allow_html=True)
+                        st.markdown(f'<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 0px;"><h3 style="margin:0; font-size: 1.2rem;">COT</h3><div style="font-size: 0.8rem;"><span style="color:#10B981;">🟢 {synth_long_pct}%</span> &nbsp;&nbsp;<span style="color:#EF4444;">🔴 {synth_short_pct}%</span></div></div>', unsafe_allow_html=True)
                     
                         fig_cot = plot_cot_gauge("COT", synth_long_pct, synth_short_pct)
                         fig_cot.update_layout(height=115, margin=dict(l=0, r=0, t=0, b=0))
@@ -1224,13 +1258,7 @@ if st.session_state.current_page == "Dashboard":
                 t_cols = st.columns(4)
                 for i, (name, data) in enumerate(tech_signals.items()):
                     with t_cols[i]:
-                        st.markdown(f"""
-                            <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); padding: 12px; border-radius: 10px; text-align: center;">
-                                <div style="font-size: 0.7rem; color: #94A3B8; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px;">{name}</div>
-                                <div style="font-size: 1rem; font-weight: 700; color: {data['color']};">{data['val']}</div>
-                                <div style="font-size: 0.65rem; color: #475569; margin-top: 2px;">{data['status']}</div>
-                            </div>
-                        """, unsafe_allow_html=True)
+                        st.markdown(f'<div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); padding: 12px; border-radius: 10px; text-align: center;"><div style="font-size: 0.7rem; color: #94A3B8; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px;">{name}</div><div style="font-size: 1rem; font-weight: 700; color: {data["color"]};">{data["val"]}</div><div style="font-size: 0.65rem; color: #475569; margin-top: 2px;">{data["status"]}</div></div>', unsafe_allow_html=True)
 
             # --- News Feed Section ---
             news = fetch_news(ticker)
@@ -1240,34 +1268,16 @@ if st.session_state.current_page == "Dashboard":
                 for i, article in enumerate(news):
                     with news_cols[i]:
                         with st.container(border=True):
-                            st.markdown(f"""
-                                <div style="font-size: 0.8rem; color: #94A3B8; margin-bottom: 5px;">{article['publisher']}</div>
-                                <div style="font-size: 0.9rem; font-weight: 600; min-height: 45px; margin-bottom: 10px;">
-                                    <a href="{article['link']}" target="_blank" style="text-decoration: none; color: #F8FAFC;">{article['title'][:60]}{'...' if len(article['title']) > 60 else ''}</a>
-                                </div>
-                            """, unsafe_allow_html=True)
+                            st.markdown(f'<div style="font-size: 0.8rem; color: #94A3B8; margin-bottom: 5px;">{article["publisher"]}</div><div style="font-size: 0.9rem; font-weight: 600; min-height: 45px; margin-bottom: 10px;"><a href="{article["link"]}" target="_blank" style="text-decoration: none; color: #F8FAFC;">{article["title"][:60]}{"..." if len(article["title"]) > 60 else ""}</a></div>', unsafe_allow_html=True)
 
             # --- AI Generated Trade Ideas Header ---
             ai_info = st.session_state.get('ai_analysis_data')
             conf_html = ""
             if ai_info:
                 c_pct = ai_info.get('confidence_pct', 50)
-                conf_html = f"""
-                <div style="text-align: right;">
-                    <div style="font-size: 0.7rem; color: #94A3B8; text-transform: uppercase; letter-spacing: 1px;">Confidence</div>
-                    <div style="font-size: 1.3rem; font-weight: 800; color: #38BDF8;">{c_pct}%</div>
-                </div>
-                """
+                conf_html = f'<div style="text-align: right;"><div style="font-size: 0.7rem; color: #94A3B8; text-transform: uppercase; letter-spacing: 1px;">Confidence</div><div style="font-size: 1.3rem; font-weight: 800; color: #38BDF8;">{c_pct}%</div></div>'
 
-            st.markdown(f"""
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 20px; margin-top: 30px;">
-                    <h2 style="margin:0; font-size: 1.4rem;">AI obchodní nápady</h2>
-                    <div style="display:flex; align-items:center; gap:20px;">
-                        <span style="background: rgba(255,255,255,0.05); padding: 5px 12px; border-radius: 8px; font-weight:600; font-size:0.9rem; color:#00E676;">{ticker} • {st.session_state.tf_interval}</span>
-                        {conf_html}
-                    </div>
-                </div>
-            """, unsafe_allow_html=True)
+            st.markdown(f'<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 20px; margin-top: 30px;"><h2 style="margin:0; font-size: 1.4rem;">AI obchodní nápady</h2><div style="display:flex; align-items:center; gap:20px;"><span style="background: rgba(255,255,255,0.05); padding: 5px 12px; border-radius: 8px; font-weight:600; font-size:0.9rem; color:#00E676;">{ticker} • {st.session_state.tf_interval}</span>{conf_html}</div></div>', unsafe_allow_html=True)
 
             # Uchování analýzy ve stavu (aby nezmizela při kliknutí na expander)
             if 'ai_analysis_data' not in st.session_state:
@@ -1374,24 +1384,7 @@ if st.session_state.current_page == "Dashboard":
                         dir_class = "glow-long" if "Long" in direction else "glow-short" if "Short" in direction else ""
                         dot_class = "pulse-dot" if "Long" in direction else "pulse-dot short" if "Short" in direction else "pulse-dot"
 
-                        st.markdown(f"""
-                        <div style="display:flex; justify-content:space-between; padding: 10px 0; border-bottom: 1px solid #1E2129;">
-                            <span style="color:#94A3B8; font-size:0.9rem;">Direction Bias</span>
-                            <span class="{dir_class}" style="font-weight:600;"><span class="{dot_class}"></span>{direction}</span>
-                        </div>
-                        <div style="display:flex; justify-content:space-between; padding: 10px 0; border-bottom: 1px solid #1E2129;">
-                            <span style="color:#94A3B8; font-size:0.9rem;">Entry Point</span>
-                            <span style="font-weight:600;">{setup.get("entry", "N/A")}</span>
-                        </div>
-                        <div style="display:flex; justify-content:space-between; padding: 10px 0; border-bottom: 1px solid #1E2129;">
-                            <span style="color:#94A3B8; font-size:0.9rem;">Take Profit</span>
-                            <span style="color:#00E676; font-weight:600;">{setup.get("tp", "N/A")}</span>
-                        </div>
-                        <div style="display:flex; justify-content:space-between; padding: 10px 0;">
-                            <span style="color:#94A3B8; font-size:0.9rem;">Stop Loss</span>
-                            <span style="color:#F87171; font-weight:600;">{setup.get("sl", "N/A")}</span>
-                        </div>
-                        """, unsafe_allow_html=True)
+                        st.markdown(f'<div style="display:flex; justify-content:space-between; padding: 10px 0; border-bottom: 1px solid #1E2129;"><span style="color:#94A3B8; font-size:0.9rem;">Direction Bias</span><span class="{dir_class}" style="font-weight:600;"><span class="{dot_class}"></span>{direction}</span></div><div style="display:flex; justify-content:space-between; padding: 10px 0; border-bottom: 1px solid #1E2129;"><span style="color:#94A3B8; font-size:0.9rem;">Entry Point</span><span style="font-weight:600;">{setup.get("entry", "N/A")}</span></div><div style="display:flex; justify-content:space-between; padding: 10px 0; border-bottom: 1px solid #1E2129;"><span style="color:#94A3B8; font-size:0.9rem;">Take Profit</span><span style="color:#00E676; font-weight:600;">{setup.get("tp", "N/A")}</span></div><div style="display:flex; justify-content:space-between; padding: 10px 0;"><span style="color:#94A3B8; font-size:0.9rem;">Stop Loss</span><span style="color:#F87171; font-weight:600;">{setup.get("sl", "N/A")}</span></div>', unsafe_allow_html=True)
 
                 st.markdown("<br>", unsafe_allow_html=True)
             
@@ -1406,12 +1399,7 @@ if st.session_state.current_page == "Dashboard":
                     st.write(ai_data.get("synthesis_and_defense", "Data nenalezena."))
             
                 if setup and setup.get("rationale"):
-                    st.markdown(f"""
-                    <div style="background: rgba(56, 189, 248, 0.1); border-left: 4px solid #38BDF8; padding: 16px; border-radius: 8px; margin-bottom: 25px;">
-                        <span style="color: #38BDF8; font-weight: 700; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 1px;">🧠 Logika setupu</span><br>
-                        <div style="color: #E2E8F0; font-size: 0.95rem; margin-top: 8px; line-height: 1.5;">{setup.get('rationale')}</div>
-                    </div>
-                    """, unsafe_allow_html=True)
+                    st.markdown(f'<div style="background: rgba(56, 189, 248, 0.1); border-left: 4px solid #38BDF8; padding: 16px; border-radius: 8px; margin-bottom: 25px;"><span style="color: #38BDF8; font-weight: 700; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 1px;">🧠 Logika setupu</span><br><div style="color: #E2E8F0; font-size: 0.95rem; margin-top: 8px; line-height: 1.5;">{str(setup.get("rationale")).strip()}</div></div>', unsafe_allow_html=True)
 
                 # --- Rychlý Export Section ---
                 with st.expander("📤 Rychlý Export Setupu (Copy-Paste)"):
