@@ -775,71 +775,62 @@ def plot_chart(df, ticker_symbol, config=None):
     return fig
 
 def plot_dxm_chart(df):
-    """Creates a highly readable DXM Oscillator (DI+ - DI-) with ADX strength."""
+    """Creates a clean ADX Bar Chart colored by trend direction."""
     df_mini = df.tail(14).copy()
-    
-    # Calculate the spread (Bulls vs Bears)
-    df_mini['DXM_Spread'] = df_mini['DI_Plus'] - df_mini['DI_Minus']
     
     fig = go.Figure()
     
-    # Colors for bars based on who is in control
-    colors = ['#10B981' if val >= 0 else '#EF4444' for val in df_mini['DXM_Spread']]
-    
-    # Bar chart for the spread
+    colors = []
+    for _, row in df_mini.iterrows():
+        if row['ADX'] < 20:
+            colors.append('#475569') # Grey for ranging
+        elif row['DI_Plus'] > row['DI_Minus']:
+            colors.append('#10B981') # Green for Up
+        else:
+            colors.append('#EF4444') # Red for Down
+            
     fig.add_trace(go.Bar(
         x=df_mini.index, 
-        y=df_mini['DXM_Spread'], 
-        marker_color=colors,
-        name='Převaha (Long/Short)'
-    ))
-    
-    # ADX Line to show trend strength
-    fig.add_trace(go.Scatter(
-        x=df_mini.index, 
         y=df_mini['ADX'], 
-        mode='lines', 
-        name='ADX (Síla)', 
-        line=dict(color='#FBBF24', width=2, dash='dot')
+        marker_color=colors,
+        name='ADX (Síla Trendu)',
+        marker_line_width=0
     ))
     
-    # Highlight the ADX threshold (25)
-    fig.add_hline(y=25, line_dash="dash", line_color="rgba(251, 191, 36, 0.4)")
-    fig.add_hline(y=0, line_width=1, line_color="rgba(255, 255, 255, 0.2)")
-
-    # Current status text for immediate readability
-    last_spread = df_mini['DXM_Spread'].iloc[-1]
-    last_adx = df_mini['ADX'].iloc[-1]
-    
-    if last_adx > 25:
-        status_text = "🔥 SILNÝ UP TREND" if last_spread > 0 else "🩸 SILNÝ DOWN TREND"
-        status_color = "#10B981" if last_spread > 0 else "#EF4444"
-    else:
-        status_text = "⚖️ SLABÝ TRH (Ranging)"
-        status_color = "#94A3B8"
-
-    fig.add_annotation(
-        text=f"<b>{status_text}</b>",
-        xref="paper", yref="paper",
-        x=0.02, y=0.98,
-        showarrow=False,
-        font=dict(size=11, color=status_color, family="Inter, sans-serif")
-    )
+    # 20 threshold line for trend confirmation
+    fig.add_hline(y=20, line_dash="dash", line_color="rgba(255, 255, 255, 0.2)")
 
     # Dynamic y-axis range
-    max_val = max(df_mini['DXM_Spread'].abs().max(), df_mini['ADX'].max())
-    max_val = max(max_val + 5, 30) # Ensure at least 30 to show the 25 threshold clearly
+    max_val = max(df_mini['ADX'].max() + 5, 40)
 
     fig.update_layout(
-        margin=dict(l=0, r=0, t=10, b=0),
-        height=150,
+        margin=dict(l=0, r=0, t=5, b=0),
+        height=100,
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
         showlegend=False,
-        xaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.05)", zeroline=False, showticklabels=True),
-        yaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.05)", zeroline=True, zerolinecolor="rgba(255,255,255,0.1)", showticklabels=True, range=[-max_val, max_val]),
+        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+        yaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.05)", zeroline=True, zerolinecolor="rgba(255,255,255,0.1)", showticklabels=True, range=[0, max_val]),
         font=dict(family="Inter, sans-serif", color="#94A3B8", size=10)
     )
-    return fig
+    
+    # Current status for header
+    last_row = df_mini.iloc[-1]
+    if last_row['ADX'] > 25:
+        status_text = "UP TREND" if last_row['DI_Plus'] > last_row['DI_Minus'] else "DOWN TREND"
+        status_color = "#10B981" if last_row['DI_Plus'] > last_row['DI_Minus'] else "#EF4444"
+        icon = "🔥" if last_row['ADX'] > 35 else ("🟢" if status_color == "#10B981" else "🔴")
+    elif last_row['ADX'] >= 20:
+        status_text = "SLÁBNOUCÍ TREND"
+        status_color = "#FBBF24"
+        icon = "⚠️"
+    else:
+        status_text = "RANGING (Bez trendu)"
+        status_color = "#94A3B8"
+        icon = "⚖️"
+        
+    status_html = f'<span style="color:{status_color}; font-weight:700; font-size:0.75rem;">{icon} {status_text}</span>'
+    
+    return fig, status_html
 
 def plot_cot_gauge(title, long_pct, short_pct):
     """Creates a circular Donut chart for COT with Percentage Label."""
@@ -1196,18 +1187,18 @@ if st.session_state.current_page == "Dashboard":
             with kpi_col2:
                 # --- DXM WIDGET ---
                 with st.container(border=True):
-                    st.markdown(f'<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 5px;"><h3 style="margin:0; font-size: 1.2rem;">DXM</h3><div style="font-size: 0.8rem;"><span style="color:#EF4444;">🔴 Short</span> &nbsp;&nbsp; <span style="color:#10B981;">🟢 Long</span></div></div>', unsafe_allow_html=True)
-                
                     if dxm_ticker != ticker:
                         df_dxm = calculate_indicators(fetch_data(dxm_ticker, "3mo"))
                     else:
                         df_dxm = df_processed
                 
                     if not df_dxm.empty and 'DI_Plus' in df_dxm.columns:
-                        fig_dxm = plot_dxm_chart(df_dxm)
+                        fig_dxm, status_html = plot_dxm_chart(df_dxm)
+                        st.markdown(f'<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 5px;"><h3 style="margin:0; font-size: 1.2rem;">DXM</h3><div style="font-size: 0.8rem;">{status_html}</div></div>', unsafe_allow_html=True)
                         fig_dxm.update_layout(height=110, margin=dict(l=0, r=0, t=0, b=0))
                         st.plotly_chart(fig_dxm, use_container_width=True, config={'displayModeBar': False})
                     else:
+                        st.markdown(f'<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 5px;"><h3 style="margin:0; font-size: 1.2rem;">DXM</h3></div>', unsafe_allow_html=True)
                         st.warning("Data pro DXM nejsou k dispozici.")
 
             with kpi_col3:
