@@ -919,13 +919,13 @@ def generate_analysis(ticker_symbol, df, fundamentals, news=None):
     Jsi špičkový kvantitativní analytik pro institucionální hedge-fond. Tvým úkolem je provést nekompromisní RIGORÓZNÍ AUDIT instrumentu {ticker_symbol}.
     
     ### ZÁVAZNÁ PRAVIDLA PRO ANALÝZU:
-    1. **Kvalita nad kvantitu (NO TRADE ZÓNA)**: NESNAŽ se najít obchod za každou cenu. Pokud si indikátory protiřečí, pokud je slabý trend (ADX < 20) bez jasného odrazu, nebo pokud jdou fundamenty proti technice, MUSÍŠ zvolit směr "Wait" (Čekat). Trpělivost je znakem profesionála. Pokud zvolíš Wait, nevyplňuj Entry, TP ani SL.
-    2. **Vážení Fundament vs. Technika**: Fundament má VŽDY vyšší váhu. Pokud jde technický signál proti silnému fundamentu, nesmíš doporučit obchod po směru techniky.
+    1. **Kvalita nad kvantitu (Objektivní hodnocení)**: Zhodnoť celkový "Edge" (tržní výhodu). Pokud je trh naprosto chaotický, data si zcela protiřečí a chybí jakýkoliv logický setup, zvol směr "Wait". Pokud ale vidíš jasnou příležitost (trendovou nebo mean-reversion odraz), navrhni obchod (Long/Short). Pokud zvolíš Wait, nevyplňuj Entry, TP ani SL.
+    2. **Vážení Fundament vs. Technika**: Fundament dodává kontext. Pokud jde technický signál proti fundamentu, zvaž, zda jde o platný krátkodobý skalp nebo past. Rizika jasně vysvětli.
     3. **Interpretace Trendu (ADX & SMA)**: 
-       - Pokud je ADX < 20, trh je v KONSOLIDACI.
-       - Pokud je cena POD SMA 50 i SMA 200, trend je silně medvědí. Nákupní setup v této situaci vyžaduje extrémní potvrzení.
-    4. **Confidence Score (Pravděpodobnost)**: Základní hladina je 50 %. Nad 65 % se setup dostane POUZE při dokonalém souladu. Pokud doporučuješ "Wait", dej Confidence Score 0.
-    5. **Ekonomická Logika**: Špatná makro data znamenají TLAK NA OSLABENÍ. Nehalucinuj o nákupu bez fundamentálního důvodu.
+       - Pokud je ADX < 20, trh je v KONSOLIDACI. V této fázi hledej mean-reversion setupy (nákup na supportu, prodej na rezistenci), nikoliv trendové průrazy!
+       - Pokud je cena POD SMA 50 i SMA 200, hlavní trend je medvědí. Long setup zde vyžaduje jasnou divergenci nebo silný support.
+    4. **Confidence Score (Pravděpodobnost)**: Buď realistický, dobrý setup má 55-65%. Extrémní shoda nad 70%. Pokud doporučuješ "Wait", dej skóre 0.
+    5. **Ekonomická Logika**: Reflektuj úrokové sazby a makro data. Nehalucinuj o nákupu bez fundamentálního či silného technického důvodu.
     
     ### VSTUPNÍ DATA:
     - TECHNICKÝ STAV: {tech_str}
