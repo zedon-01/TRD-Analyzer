@@ -1326,6 +1326,17 @@ if st.session_state.current_page == "Dashboard":
             current_context = f"{ticker}_{st.session_state.tf_interval}"
             if st.session_state.ai_analysis_data and st.session_state.current_analysis_ticker == current_context:
                 ai_data = st.session_state.ai_analysis_data
+                
+                # Robustness check: Ensure ai_data is a dictionary
+                if isinstance(ai_data, str):
+                    try:
+                        import json
+                        ai_data = json.loads(ai_data)
+                    except Exception:
+                        ai_data = {}
+                if not isinstance(ai_data, dict):
+                    ai_data = {}
+                    
                 sub_col1, sub_col2 = st.columns([1, 1], gap="medium")
             
                 with sub_col1:
