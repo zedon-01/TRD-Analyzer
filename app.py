@@ -7,23 +7,29 @@ from plotly.subplots import make_subplots
 import json
 import base64
 from openai import OpenAI
-import google.generativeai as genai
+from google import genai
 from datetime import datetime, timedelta
 import pytz # Potřebné pro korektní časová pásma
 
 # --- API Key Detection (Global Scope) ---
 def get_api_credentials():
-    """Dynamically fetch API keys, prioritizing manual session overrides over secrets."""
-    # Check session state overrides first
-    manual_key = st.session_state.get("manual_api_key", "").strip()
-    manual_provider = st.session_state.get("manual_api_provider", "Gemini")
+    """Dynamically fetch API keys, prioritizing persistent session overrides over secrets."""
+    manual_key = st.session_state.get("persistent_api_key", "").strip()
+    manual_provider = st.session_state.get("persistent_api_provider", "Gemini")
     
     if manual_key:
         return manual_key, manual_provider
         
-    # Fallback to secrets
-    gemini_key = st.secrets.get("GEMINI_API_KEY", "").strip()
-    openai_key = st.secrets.get("OPENAI_API_KEY", "").strip()
+    # Bypass st.secrets cache by reading TOML directly
+    try:
+        import tomllib
+        with open(".streamlit/secrets.toml", "rb") as f:
+            data = tomllib.load(f)
+            gemini_key = data.get("GEMINI_API_KEY", "").strip()
+            openai_key = data.get("OPENAI_API_KEY", "").strip()
+    except Exception:
+        gemini_key = st.secrets.get("GEMINI_API_KEY", "").strip()
+        openai_key = st.secrets.get("OPENAI_API_KEY", "").strip()
     
     if gemini_key:
         return gemini_key, "Gemini"
@@ -54,12 +60,20 @@ if 'ai_analysis_data' not in st.session_state:
     st.session_state.ai_analysis_data = None
 if 'analysis_history' not in st.session_state:
     st.session_state.analysis_history = []
-if 'manual_api_key' not in st.session_state:
-    st.session_state.manual_api_key = ""
-if 'manual_api_provider' not in st.session_state:
-    st.session_state.manual_api_provider = "Gemini"
-if 'manual_model_name' not in st.session_state:
-    st.session_state.manual_model_name = "gemini-1.5-flash-latest"
+if 'persistent_api_key' not in st.session_state or not st.session_state.persistent_api_key:
+    st.session_state.persistent_api_key = api_key if api_key else ""
+if 'persistent_api_provider' not in st.session_state:
+    st.session_state.persistent_api_provider = ai_provider if ai_provider else "Gemini"
+if 'persistent_model_name' not in st.session_state:
+    st.session_state.persistent_model_name = "gemini-2.5-flash"
+
+def sync_api_credentials():
+    if "input_api_key" in st.session_state:
+        st.session_state.persistent_api_key = st.session_state.input_api_key
+    if "input_api_provider" in st.session_state:
+        st.session_state.persistent_api_provider = st.session_state.input_api_provider
+    if "input_model_name" in st.session_state:
+        st.session_state.persistent_model_name = st.session_state.input_model_name
 
 # No base64 needed, pure CSS logo used.
 
@@ -418,14 +432,23 @@ def fetch_data(ticker_symbol, period, interval="1d"):
 
 @st.cache_data(show_spinner="Načítám fundamentální data...", ttl=3600)
 def fetch_fundamentals(ticker_symbol):
-    """Fetches fundamental data from yfinance with custom session."""
+    """Fetches fundamental data from yfinance with a hard timeout to prevent hangs."""
+    import concurrent.futures
     session = get_yfinance_session()
     ticker = yf.Ticker(ticker_symbol, session=session)
-    info = ticker.info
     
     fundamentals = {}
     
-    # Safely extract common metrics (might not exist for crypto/forex)
+    try:
+        # ticker.info is notoriously slow and can hang indefinitely
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(lambda: ticker.info)
+            info = future.result(timeout=12) # 12 second hard timeout
+    except Exception:
+        # If it hangs or fails, return empty so the app can continue
+        return {}
+    
+    # Safely extract common metrics
     metrics_to_extract = [
         "shortName", "sector", "industry", "marketCap", 
         "trailingPE", "forwardPE", "trailingEps", 
@@ -604,6 +627,48 @@ def calculate_synthetic_sentiment(df):
     
     return long_pct, short_pct
 
+def detect_orderblocks(df, lookback=150):
+    """Detects simple visual orderblocks (Bullish & Bearish) for the chart."""
+    df_ob = df.copy()
+    if len(df_ob) < lookback:
+        lookback = len(df_ob)
+        
+    df_ob['Body'] = abs(df_ob['Close'] - df_ob['Open'])
+    avg_body = df_ob['Body'].rolling(window=20).mean()
+    
+    bullish_obs = []
+    bearish_obs = []
+    
+    for i in range(len(df_ob) - lookback, len(df_ob) - 1):
+        if i < 20: continue
+        
+        # Bullish OB
+        if df_ob['Close'].iloc[i] < df_ob['Open'].iloc[i]: # Bearish candle
+            # Next candle is strong bullish and breaks high
+            if df_ob['Close'].iloc[i+1] > df_ob['Open'].iloc[i+1] and df_ob['Body'].iloc[i+1] > 1.2 * avg_body.iloc[i]:
+                if df_ob['Close'].iloc[i+1] > df_ob['High'].iloc[i]:
+                    bullish_obs.append({
+                        'start': df_ob.index[i],
+                        'end': df_ob.index[-1],
+                        'top': df_ob['High'].iloc[i],
+                        'bottom': df_ob['Low'].iloc[i]
+                    })
+                    
+        # Bearish OB
+        if df_ob['Close'].iloc[i] > df_ob['Open'].iloc[i]: # Bullish candle
+            # Next candle is strong bearish and breaks low
+            if df_ob['Close'].iloc[i+1] < df_ob['Open'].iloc[i+1] and df_ob['Body'].iloc[i+1] > 1.2 * avg_body.iloc[i]:
+                if df_ob['Close'].iloc[i+1] < df_ob['Low'].iloc[i]:
+                    bearish_obs.append({
+                        'start': df_ob.index[i],
+                        'end': df_ob.index[-1],
+                        'top': df_ob['High'].iloc[i],
+                        'bottom': df_ob['Low'].iloc[i]
+                    })
+                    
+    # Return last 3 to keep chart clean
+    return bullish_obs[-3:], bearish_obs[-3:]
+
 def plot_chart(df, ticker_symbol, config=None):
     """Creates a comprehensive Plotly chart dynamically based on config."""
     if config is None:
@@ -613,7 +678,8 @@ def plot_chart(df, ticker_symbol, config=None):
             "show_bb": True,
             "show_volume": True,
             "show_macd": True,
-            "show_rsi": True
+            "show_rsi": True,
+            "show_ob": False
         }
         
     # Dynamically compute subplots
@@ -668,6 +734,17 @@ def plot_chart(df, ticker_symbol, config=None):
     if config["show_bb"] and 'BB_High' in df.columns and 'BB_Low' in df.columns:
         fig.add_trace(go.Scatter(x=df.index, y=df['BB_High'], line=dict(color='rgba(255,255,255,0.2)', width=1), name='BB High'), row=1, col=1)
         fig.add_trace(go.Scatter(x=df.index, y=df['BB_Low'], fill='tonexty', fillcolor='rgba(255,255,255,0.02)', line=dict(color='rgba(255,255,255,0.2)', width=1), name='BB Low'), row=1, col=1)
+
+    if config.get("show_ob", False):
+        bull_obs, bear_obs = detect_orderblocks(df)
+        for ob in bull_obs:
+            fig.add_shape(type="rect", x0=ob['start'], y0=ob['bottom'], x1=ob['end'], y1=ob['top'],
+                          fillcolor="rgba(16, 185, 129, 0.15)", line=dict(color="rgba(16, 185, 129, 0.4)", width=1),
+                          layer="below", row=1, col=1)
+        for ob in bear_obs:
+            fig.add_shape(type="rect", x0=ob['start'], y0=ob['bottom'], x1=ob['end'], y1=ob['top'],
+                          fillcolor="rgba(239, 68, 68, 0.15)", line=dict(color="rgba(239, 68, 68, 0.4)", width=1),
+                          layer="below", row=1, col=1)
 
     # Dynamic Subplots assignment
     current_row = 2
@@ -863,11 +940,11 @@ def find_available_gemini_models(api_key):
         return st.session_state.cached_gemini_models
 
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
+        from google import genai
+        client = genai.Client(api_key=api_key)
         available_models = []
-        for m in genai.list_models():
-            if 'generateContent' in m.supported_generation_methods:
+        for m in client.models.list():
+            if hasattr(m, 'name'):
                 available_models.append(m.name)
         
         # Cache the results
@@ -919,13 +996,13 @@ def generate_analysis(ticker_symbol, df, fundamentals, news=None):
     Jsi špičkový kvantitativní analytik pro institucionální hedge-fond. Tvým úkolem je provést nekompromisní RIGORÓZNÍ AUDIT instrumentu {ticker_symbol}.
     
     ### ZÁVAZNÁ PRAVIDLA PRO ANALÝZU:
-    1. **Kvalita nad kvantitu (Objektivní hodnocení)**: Zhodnoť celkový "Edge" (tržní výhodu). Pokud je trh naprosto chaotický, data si zcela protiřečí a chybí jakýkoliv logický setup, zvol směr "Wait". Pokud ale vidíš jasnou příležitost (trendovou nebo mean-reversion odraz), navrhni obchod (Long/Short). Pokud zvolíš Wait, nevyplňuj Entry, TP ani SL.
-    2. **Vážení Fundament vs. Technika**: Fundament dodává kontext. Pokud jde technický signál proti fundamentu, zvaž, zda jde o platný krátkodobý skalp nebo past. Rizika jasně vysvětli.
-    3. **Interpretace Trendu (ADX & SMA)**: 
-       - Pokud je ADX < 20, trh je v KONSOLIDACI. V této fázi hledej mean-reversion setupy (nákup na supportu, prodej na rezistenci), nikoliv trendové průrazy!
-       - Pokud je cena POD SMA 50 i SMA 200, hlavní trend je medvědí. Long setup zde vyžaduje jasnou divergenci nebo silný support.
-    4. **Confidence Score (Pravděpodobnost)**: Buď realistický, dobrý setup má 55-65%. Extrémní shoda nad 70%. Pokud doporučuješ "Wait", dej skóre 0.
-    5. **Ekonomická Logika**: Reflektuj úrokové sazby a makro data. Nehalucinuj o nákupu bez fundamentálního či silného technického důvodu.
+    1. **Vážení Fundament vs. Technika**: Fundament má VŽDY vyšší váhu. Pokud jde technický signál (např. RSI nákup) proti silnému negativnímu fundamentu (např. špatné HDP), NESMÍŠ doporučit Long. V takovém případě musíš snížit skóre o 20 % a do analýzy vložit varování: "CONTRARIAN TRADE - HIGH RISK".
+    2. **Interpretace Trendu (ADX & SMA)**: 
+       - Pokud je ADX < 20, trh je v KONSOLIDACI (range). Nesmíš psát o silném trendu.
+       - Pokud je cena POD SMA 50 i SMA 200, trend je silně medvědí. Nákupní setup (Long) v této situaci vyžaduje extrémní potvrzení (např. silný fundament + RSI divergence).
+    3. **Confidence Score (Pravděpodobnost)**: Základní hladina je 50 %. Nad 65 % se setup dostane POUZE při souladu Techniky + Fundamentu + Momenta (ADX > 25). Buď konzervativní.
+    4. **Dynamické RRR**: Vyhledávej setupy s minimálním RRR 1:1.5 nebo 1:2. Pokud navrhneš RRR 1:1, musíš v obhajobě zdůraznit, že strategie vyžaduje extrémně vysokou úspěšnost (Win Rate).
+    5. **Ekonomická Logika**: Špatná makro data pro danou zemi (nezaměstnanost, HDP) znamenají TLAK NA OSLABENÍ měny. Nehalucinuj o "prostoru pro nákup" bez jasného fundamentálního důvodu (např. spekulace na pivot banky).
     
     ### VSTUPNÍ DATA:
     - TECHNICKÝ STAV: {tech_str}
@@ -936,17 +1013,18 @@ def generate_analysis(ticker_symbol, df, fundamentals, news=None):
     ### POŽADAVKY NA VÝSTUP (PŘÍSNĚ VALIDNÍ JSON V ČEŠTINĚ):
     {{
       "trade_setup": {{
-        "direction": "Long / Short / Wait",
-        "entry": "Konkrétní cenová hladina (Pokud Wait, napiš 'N/A')",
-        "tp": "První a druhý cílový profit (Pokud Wait, napiš 'N/A')",
-        "sl": "Hladina invalidace setupu (Pokud Wait, napiš 'N/A')",
-        "rationale": "Důkladné vysvětlení setupu, NEBO logické zdůvodnění proč se má čekat (Wait) a na jaký signál se čeká."
+        "direction": "LONG / SHORT / WAIT",
+        "entry": "Konkrétní cenová hladina nebo zóna (Pokud WAIT, napiš 'N/A')",
+        "tp": "První a druhý cílový profit (Pokud WAIT, napiš 'N/A')",
+        "sl": "Hladina invalidace setupu (Pokud WAIT, napiš 'N/A')",
+        "rationale": "Důkladné 3-4 věty vysvětlující konfluenci indikátorů, NEBO zdůvodnění proč se má čekat (WAIT).",
+        "when_to_ask_again": "Napiš, za jakých podmínek se má uživatel znovu zeptat (např. 'Až cena dosáhne X', 'Za 2 hodiny' atd.). Pokud je to LONG/SHORT, napiš 'N/A'."
       }},
       "sentiment_score": Číslo od -100 (Bearish) do 100 (Bullish),
-      "confidence_pct": Číslo od 0 do 100,
-      "technical_analysis": "Rozbor trendu, volatility a síly. Min 60 slov.",
-      "fundamental_analysis": "Analýza makro kontextu a zpráv. Min 60 slov.",
-      "synthesis_and_defense": "PROČ JE TENTO SETUP PLATNÝ, NEBO PROČ SE MÁ ČEKAT? Min 80 slov."
+      "confidence_pct": Číslo od 0 do 100 (Reálná pravděpodobnost úspěchu dle pravidel výše),
+      "technical_analysis": "Rozbor trendu (SMA), volatility (BB) a síly (ADX). Hledej divergence. Min 60 slov.",
+      "fundamental_analysis": "Analýza makro kontextu a vlivu zpráv. Musí odpovídat ekonomické logice! Min 60 slov.",
+      "synthesis_and_defense": "PROČ JE TENTO SETUP PLATNÝ? Identifikuj pasti na retail. Pokud je setup protitrendový, uveď 'CONTRARIAN TRADE - HIGH RISK'. Min 80 slov."
     }}
     
     Odpovídej POUZE ve formátu JSON v českém jazyce.
@@ -964,17 +1042,19 @@ def generate_analysis(ticker_symbol, df, fundamentals, news=None):
             return json.loads(response.choices[0].message.content)
 
         elif provider == "Gemini":
-            import google.generativeai as genai
-            genai.configure(api_key=api_key)
+            from google import genai
+            from google.genai import types
+            client = genai.Client(api_key=api_key)
             
-            # Dynamic Model Discovery
-            models_to_try = find_available_gemini_models(api_key)
-            if not models_to_try:
-                models_to_try = ['gemini-1.5-flash', 'gemini-pro']
+            # Skip dynamic discovery which hangs due to Google API changes
+            models_to_try = ['gemini-2.5-flash', 'gemini-2.0-flash']
             
             # Manual override priority
-            if st.session_state.get("manual_model_name"):
-                m = st.session_state.manual_model_name.strip()
+            if st.session_state.get("persistent_model_name"):
+                m = st.session_state.persistent_model_name.strip()
+                m = m.replace('models/', '') # genai SDK doesn't need models/ prefix usually
+                if "1.5" in m or "pro" in m:
+                    m = "gemini-2.5-flash"
                 if m not in models_to_try: models_to_try.insert(0, m)
             
             models_to_try = list(dict.fromkeys(models_to_try))
@@ -984,23 +1064,36 @@ def generate_analysis(ticker_symbol, df, fundamentals, news=None):
                 try:
                     # Try with JSON mode first
                     try:
-                        model = genai.GenerativeModel(model_name, generation_config={"response_mime_type": "application/json"})
-                        response = model.generate_content(sys_prompt)
+                        response = client.models.generate_content(
+                            model=model_name,
+                            contents=sys_prompt,
+                            config=types.GenerateContentConfig(
+                                response_mime_type="application/json",
+                                temperature=0.7
+                            )
+                        )
                         return json.loads(response.text)
                     except Exception:
                         # Fallback to plain text
-                        model = genai.GenerativeModel(model_name)
-                        response = model.generate_content(sys_prompt)
+                        response = client.models.generate_content(
+                            model=model_name,
+                            contents=sys_prompt,
+                            config=types.GenerateContentConfig(temperature=0.7)
+                        )
                         text = response.text
                         if "```json" in text: text = text.split("```json")[1].split("```")[0].strip()
                         elif "```" in text: text = text.split("```")[1].split("```")[0].strip()
+                        start = text.find("{")
+                        end = text.rfind("}")
+                        if start != -1 and end != -1:
+                            text = text[start:end+1]
                         return json.loads(text)
                 except Exception as e:
                     last_err = str(e)
                     continue
             
             if last_err: 
-                if "429" in last_err:
+                if "429" in last_err or "quota" in last_err.lower():
                     st.error("⚠️ AI Limit: Google vás dočasně omezil (Too Many Requests). Počkejte minutu nebo použijte jiný klíč.")
                 else:
                     st.error(f"AI selhala: {last_err}")
@@ -1030,13 +1123,13 @@ def chat_with_ai(prompt, analysis_data):
             )
             return resp.choices[0].message.content
         else:
-            import google.generativeai as genai
-            genai.configure(api_key=api_key)
-            # Use cached model or discovery
-            models = find_available_gemini_models(api_key)
-            model_name = models[0] if models else "gemini-1.5-flash"
-            model = genai.GenerativeModel(model_name)
-            resp = model.generate_content(f"Kontext: {context}\n\nUživatel se ptá: {prompt}")
+            from google import genai
+            client = genai.Client(api_key=api_key)
+            model_name = "gemini-2.5-flash"
+            resp = client.models.generate_content(
+                model=model_name,
+                contents=f"Kontext: {context}\n\nUživatel se ptá: {prompt}"
+            )
             return resp.text
     except Exception as e:
         return f"Chyba chatu: {e}"
@@ -1046,19 +1139,19 @@ def chat_with_ai(prompt, analysis_data):
 
 with st.sidebar:
     st.markdown("""
-        <div style="padding: 10px 0 30px 0; border-bottom: 1px solid rgba(255,255,255,0.05); margin-bottom: 30px;">
-            <div style="display: flex; align-items: center; gap: 12px;">
-                <div style="width: 38px; height: 38px; background: linear-gradient(135deg, #00E676 0%, #00C853 100%); border-radius: 10px; display: flex; align-items: center; justify-content: center; box-shadow: 0 0 20px rgba(0, 230, 118, 0.3);">
-                    <span style="color: #0F172A; font-size: 20px; font-weight: 800;">A</span>
-                </div>
-                <div>
-                    <div style="font-size: 16px; font-weight: 800; color: #F8FAFC; line-height: 1; letter-spacing: -0.5px;">TRADING</div>
-                    <div style="font-size: 10px; color: #00E676; font-weight: 600; letter-spacing: 2px;">ANALYZER</div>
-                </div>
-            </div>
+<div style="padding: 10px 0 30px 0; border-bottom: 1px solid rgba(255,255,255,0.05); margin-bottom: 30px;">
+    <div style="display: flex; align-items: center; gap: 12px;">
+        <div style="width: 38px; height: 38px; background: linear-gradient(135deg, #00E676 0%, #00C853 100%); border-radius: 10px; display: flex; align-items: center; justify-content: center; box-shadow: 0 0 20px rgba(0, 230, 118, 0.3);">
+            <span style="color: #0F172A; font-size: 20px; font-weight: 800;">A</span>
         </div>
-        <br>
-    """, unsafe_allow_html=True)
+        <div>
+            <div style="font-size: 16px; font-weight: 800; color: #F8FAFC; line-height: 1; letter-spacing: -0.5px;">TRADING</div>
+            <div style="font-size: 10px; color: #00E676; font-weight: 600; letter-spacing: 2px;">ANALYZER</div>
+        </div>
+    </div>
+</div>
+<br>
+""", unsafe_allow_html=True)
 
     with st.expander("📚 Vysvětlivky pojmů", expanded=True):
         st.markdown('<div style="font-size:0.85rem; color:#94A3B8;"><b>Score:</b> AI ohodnocení situace od -100 do 100.<br><br><b>DXM:</b> Měří tržní sílu. <span style="color:#10B981;">Zelená</span> = Nákupy, <span style="color:#EF4444;">Červená</span> = Prodeje.<br><br><b>COT:</b> Commitment of Traders. Ukazuje naklonění kapitálu institucí.</div>', unsafe_allow_html=True)
@@ -1103,10 +1196,11 @@ with st.sidebar:
             with col_set1:
                 show_sma = st.checkbox("SMA", value=False)
                 show_bb = st.checkbox("B. Bands", value=False)
-                show_volume = st.checkbox("Volume", value=False)
+                show_volume = st.checkbox("Volume", value=True)
             with col_set2:
                 show_macd = st.checkbox("MACD", value=False)
                 show_rsi = st.checkbox("RSI", value=False)
+                show_ob = st.checkbox("OB", value=False)
             
             chart_config = {
                 "chart_type": chart_type,
@@ -1114,7 +1208,8 @@ with st.sidebar:
                 "show_bb": show_bb,
                 "show_volume": show_volume,
                 "show_macd": show_macd,
-                "show_rsi": show_rsi
+                "show_rsi": show_rsi,
+                "show_ob": show_ob
             }
 
         if st.session_state.analysis_history:
@@ -1172,12 +1267,15 @@ if st.session_state.current_page == "Dashboard":
                     arrow = "▲" if price_change >= 0 else "▼"
                 
                     # Adaptive rounding based on price magnitude
-                    if current_price >= 1:
+                    if current_price >= 1000:
                         price_fmt = f"${float(current_price):,.2f}"
                         change_fmt = f"${abs(price_change):.2f}"
+                    elif current_price >= 10:
+                        price_fmt = f"${float(current_price):,.3f}"
+                        change_fmt = f"${abs(price_change):.3f}"
                     elif current_price >= 0.01:
-                        price_fmt = f"${float(current_price):,.4f}"
-                        change_fmt = f"${abs(price_change):.4f}"
+                        price_fmt = f"${float(current_price):,.5f}"
+                        change_fmt = f"${abs(price_change):.5f}"
                     else:
                         price_fmt = f"${current_price:,.6f}"
                         change_fmt = f"${abs(price_change):.6f}"
@@ -1281,46 +1379,54 @@ if st.session_state.current_page == "Dashboard":
                 if not api_key:
                     st.error("Zadejte prosím API klíč do .streamlit/secrets.toml pro spuštění AI analýzy.")
                 else:
-                    with st.spinner("Sběr dat a generování posudku..."):
+                    status = st.status("🧠 AI analyzuje trh...", expanded=True)
+                    try:
+                        # 1. Reuse existing fundamentals (or fetch if missing)
+                        status.write("🏢 Získávám fundamentální ukazatele...")
                         try:
-                            # Fetch data with individual error handling to avoid total failure
-                            try:
-                                fundamentals = fetch_fundamentals(ticker)
-                            except Exception:
-                                fundamentals = {}
-                                st.warning("⚠️ Fundamentální data dočasně nedostupná (Yahoo Limit).")
-                            
+                            fundamentals = fetch_fundamentals(ticker)
+                        except Exception:
+                            fundamentals = {}
+                            status.write("⚠️ Fundamenty nedostupné.")
+
+                        # 2. Reuse existing news if available, or fetch
+                        status.write("📰 Prohledávám tržní zprávy...")
+                        if 'news' not in locals() or not news:
                             try:
                                 news_context = fetch_news(ticker)
                             except Exception:
                                 news_context = []
-                                st.warning("⚠️ Tržní zprávy dočasně nedostupné (Yahoo Limit).")
-                                
-                            # Now call the AI
-                            ai_data = generate_analysis(ticker, df_processed, fundamentals, news=news_context)
+                        else:
+                            news_context = news
+
+                        # 3. AI Analysis
+                        status.write("⚡ Generuji finální posudek a setup...")
+                        ai_data = generate_analysis(ticker, df_processed, fundamentals, news=news_context)
+                    
+                        if ai_data:
+                            status.update(label="✅ Analýza dokončena!", state="complete", expanded=False)
+                            st.session_state.ai_analysis_data = ai_data
+                            st.session_state.current_analysis_ticker = f"{ticker}_{st.session_state.tf_interval}"
+                            st.session_state.chat_history = [] 
                         
-                            if ai_data:
-                                st.session_state.ai_analysis_data = ai_data
-                                st.session_state.current_analysis_ticker = f"{ticker}_{st.session_state.tf_interval}"
-                                st.session_state.chat_history = [] # Reset chat for new analysis
-                            
-                                # Save to History
-                                st.session_state.analysis_history.append({
-                                    "ticker": ticker,
-                                    "tf": st.session_state.tf_interval,
-                                    "time": datetime.now().strftime("%H:%M:%S"),
-                                    "data": ai_data,
-                                    "chat": []
-                                })
-                                # Limit history to last 10 items
-                                if len(st.session_state.analysis_history) > 10:
-                                    st.session_state.analysis_history.pop(0)
+                            # Save to History
+                            st.session_state.analysis_history.append({
+                                "ticker": ticker,
+                                "tf": st.session_state.tf_interval,
+                                "time": datetime.now().strftime("%H:%M:%S"),
+                                "data": ai_data,
+                                "chat": []
+                            })
+                            if len(st.session_state.analysis_history) > 10:
+                                st.session_state.analysis_history.pop(0)
+                        else:
+                            status.update(label="❌ AI selhala", state="error", expanded=False)
                                 
-                        except Exception as e:
-                            if "429" in str(e) or "Too Many Requests" in str(e):
-                                st.error("🚦 Limit požadavků vyčerpán. Yahoo Finance nebo AI blokuje další dotazy. Zkuste to za minutu.")
-                            else:
-                                st.error(f"Při generování analýzy nastala chyba: {e}")
+                    except Exception as e:
+                        if "429" in str(e) or "Too Many Requests" in str(e):
+                            st.error("🚦 Limit požadavků vyčerpán. Yahoo Finance nebo AI blokuje další dotazy. Zkuste to za minutu.")
+                        else:
+                            st.error(f"Při generování analýzy nastala chyba: {e}")
 
             # Zobrazení AI dat ze session_state
             current_context = f"{ticker}_{st.session_state.tf_interval}"
@@ -1342,8 +1448,15 @@ if st.session_state.current_page == "Dashboard":
                 with sub_col1:
                     with st.container(border=True):
                         # --- Vizualizace (Gauge Chart) ---
-                        score = ai_data.get("sentiment_score", 0)
-                        label = ai_data.get("sentiment_label", "Neutral")
+                        try:
+                            score = float(ai_data.get("sentiment_score", 0))
+                        except Exception:
+                            score = 0.0
+                            
+                        if "sentiment_label" in ai_data:
+                            label = str(ai_data["sentiment_label"])
+                        else:
+                            label = "Bullish" if score >= 20 else ("Bearish" if score <= -20 else "Neutral")
                     
                         fig_gauge = go.Figure(go.Indicator(
                             mode = "gauge+number",
@@ -1379,18 +1492,20 @@ if st.session_state.current_page == "Dashboard":
                         st.markdown("<h3 style='margin-top:0; margin-bottom:15px; font-size: 1.1rem;'>Score overview</h3>", unsafe_allow_html=True)
                     
                         setup = ai_data.get("trade_setup", {})
-                        direction = setup.get("direction", "N/A")
-                        if direction is None:
-                            direction = "N/A"
+                        if isinstance(setup, str):
+                            try: setup = json.loads(setup)
+                            except Exception: setup = {}
+                        if not isinstance(setup, dict): setup = {}
                         
-                        dir_upper = direction.upper()
-                        is_wait = "WAIT" in dir_upper or "NEUTRAL" in dir_upper or "N/A" in dir_upper
+                        direction = str(setup.get("direction", "N/A"))
+                        dir_lower = direction.lower()
                         
-                        if is_wait:
-                            st.markdown(f'<div style="display:flex; justify-content:space-between; padding: 10px 0; border-bottom: 1px solid #1E2129;"><span style="color:#94A3B8; font-size:0.9rem;">Direction Bias</span><span style="color:#F59E0B; font-weight:600;"><span class="pulse-dot" style="background-color:#F59E0B; box-shadow:0 0 8px #F59E0B;"></span>Wait (No Trade)</span></div><div style="padding: 20px 10px; text-align: center; color: #94A3B8; font-style: italic; line-height: 1.5;">Aktuální podmínky na trhu nejsou vhodné pro bezpečný vstup.<br>Čekejte na silnější signál.</div>', unsafe_allow_html=True)
+                        dir_class = "glow-long" if "long" in dir_lower else ("glow-short" if "short" in dir_lower else "")
+                        dot_class = "pulse-dot" if "long" in dir_lower else ("pulse-dot short" if "short" in dir_lower else "pulse-dot")
+
+                        if direction == "WAIT":
+                            st.markdown(f'<div style="display:flex; justify-content:space-between; padding: 10px 0; border-bottom: 1px solid #1E2129;"><span style="color:#94A3B8; font-size:0.9rem;">Direction Bias</span><span style="color:#F59E0B; font-weight:600;"><span class="pulse-dot" style="background-color:#F59E0B; box-shadow:0 0 8px #F59E0B;"></span>WAIT (No Trade)</span></div><div style="padding: 20px 10px; text-align: center; color: #94A3B8; line-height: 1.5;"><b>Proč čekat:</b> {setup.get("rationale", "Nedostatek jasných signálů.")}<br><br><span style="color: #38BDF8; font-weight: 600;">Kdy se zeptat znovu:</span> {setup.get("when_to_ask_again", "Zkuste to později.")}</div>', unsafe_allow_html=True)
                         else:
-                            dir_class = "glow-long" if "LONG" in dir_upper else "glow-short" if "SHORT" in dir_upper else ""
-                            dot_class = "pulse-dot" if "LONG" in dir_upper else "pulse-dot short" if "SHORT" in dir_upper else "pulse-dot"
                             st.markdown(f'<div style="display:flex; justify-content:space-between; padding: 10px 0; border-bottom: 1px solid #1E2129;"><span style="color:#94A3B8; font-size:0.9rem;">Direction Bias</span><span class="{dir_class}" style="font-weight:600;"><span class="{dot_class}"></span>{direction}</span></div><div style="display:flex; justify-content:space-between; padding: 10px 0; border-bottom: 1px solid #1E2129;"><span style="color:#94A3B8; font-size:0.9rem;">Entry Point</span><span style="font-weight:600;">{setup.get("entry", "N/A")}</span></div><div style="display:flex; justify-content:space-between; padding: 10px 0; border-bottom: 1px solid #1E2129;"><span style="color:#94A3B8; font-size:0.9rem;">Take Profit</span><span style="color:#00E676; font-weight:600;">{setup.get("tp", "N/A")}</span></div><div style="display:flex; justify-content:space-between; padding: 10px 0;"><span style="color:#94A3B8; font-size:0.9rem;">Stop Loss</span><span style="color:#F87171; font-weight:600;">{setup.get("sl", "N/A")}</span></div>', unsafe_allow_html=True)
 
                 st.markdown("<br>", unsafe_allow_html=True)
@@ -1410,7 +1525,16 @@ if st.session_state.current_page == "Dashboard":
 
                 # --- Rychlý Export Section ---
                 with st.expander("📤 Rychlý Export Setupu (Copy-Paste)"):
-                    export_text = f"""
+                    if direction == "WAIT":
+                        export_text = f"""
+🚀 TRADING SETUP: {ticker} ({st.session_state.tf_interval})
+---
+🧭 Směr: WAIT (No Trade)
+🧠 Důvod: {setup.get('rationale', 'N/A')}
+⏳ Kdy zkontrolovat: {setup.get('when_to_ask_again', 'N/A')}
+                        """
+                    else:
+                        export_text = f"""
 🚀 TRADING SETUP: {ticker} ({st.session_state.tf_interval})
 ---
 🧭 Směr: {direction}
@@ -1419,7 +1543,7 @@ if st.session_state.current_page == "Dashboard":
 ❌ Stop Loss: {setup.get('sl', 'N/A')}
 ---
 🧠 Důvod: {setup.get('rationale', 'N/A')}
-                    """
+                        """
                     st.code(export_text.strip(), language="text")
             
                 # --- INTERAKTIVNÍ CHAT ---
@@ -1473,13 +1597,14 @@ else:
             st.markdown("### 🧠 AI Engine & API")
             st.info("Zde můžete vložit svůj API klíč. Změna se uloží automaticky po stisku Enter.")
             
-            # Direct link to session state via 'key' parameter
-            st.text_input("Vlastní API Key:", type="password", key="manual_api_key", help="Vložte klíč z Google AI Studio nebo OpenAI.")
-            st.radio("Vyberte poskytovatele:", ["Gemini", "OpenAI"], key="manual_api_provider", horizontal=True)
+            # Decoupled widget state from persistent session storage
+            st.text_input("Vlastní API Key:", type="password", key="input_api_key", value=st.session_state.persistent_api_key, on_change=sync_api_credentials, help="Vložte klíč z Google AI Studio nebo OpenAI.")
+            st.radio("Vyberte poskytovatele:", ["Gemini", "OpenAI"], key="input_api_provider", index=0 if st.session_state.persistent_api_provider == "Gemini" else 1, on_change=sync_api_credentials, horizontal=True)
             
             st.divider()
             
             if st.button("🔍 Otestovat připojení", use_container_width=True):
+                sync_api_credentials()
                 test_key, test_provider = get_api_credentials()
                 if not test_key or not test_key.strip():
                     st.error("Chybí klíč pro testování! Vložte jej do pole výše.")
@@ -1488,36 +1613,19 @@ else:
                         # Use the actual generate_analysis engine logic for the test to be 100% sure
                         try:
                             if test_provider == "Gemini":
-                                import google.generativeai as genai
-                                genai.configure(api_key=test_key.strip())
+                                from google import genai
+                                client = genai.Client(api_key=test_key.strip())
                                 
-                                # Use the same robust fallback list as the main engine
-                                test_models = [
-                                    'gemini-1.5-flash',
-                                    'models/gemini-1.5-flash',
-                                    'gemini-1.5-pro',
-                                    'models/gemini-pro',
-                                    'gemini-pro'
-                                ]
-                                
-                                worked_model = None
-                                last_test_err = None
-                                
-                                # Use dynamic discovery for the test
-                                test_models = find_available_gemini_models(test_key.strip())
-                                
-                                # Add some fallbacks just in case discovery fails
-                                if not test_models:
-                                    test_models = ['gemini-1.5-flash', 'gemini-pro']
+                                # Use hardcoded working model instead of dynamic discovery which hangs
+                                test_models = ['gemini-2.5-flash', 'gemini-2.0-flash']
                                 
                                 worked_model = None
                                 last_test_err = None
                                 
                                 for tm in test_models:
                                     try:
-                                        t_model = genai.GenerativeModel(tm)
-                                        t_resp = t_model.generate_content("Say OK")
-                                        if t_resp:
+                                        t_resp = client.models.generate_content(model=tm, contents="Say OK")
+                                        if t_resp and t_resp.text:
                                             worked_model = tm
                                             break
                                     except Exception as e:
@@ -1527,7 +1635,8 @@ else:
                                 if worked_model:
                                     st.success(f"✅ Gemini: Připojení je v pořádku! (Model: {worked_model})")
                                 else:
-                                    st.error(f"❌ Test selhal. Google pro váš klíč nenašel žádné dostupné AI modely. Zkontrolujte, zda máte v AI Studiu aktivní projekt.")
+                                    err_msg = f"\n\nDetail chyby: {last_test_err}" if last_test_err else ""
+                                    st.error(f"❌ Test selhal. Zkontrolujte platnost API klíče.{err_msg}")
                             else:
                                 from openai import OpenAI
                                 client = OpenAI(api_key=test_key.strip())
@@ -1539,15 +1648,15 @@ else:
             # Technical settings moved to an expander to keep UI clean
             with st.expander("🛠️ Pokročilá Diagnostika"):
                 st.checkbox("Ladící režim (Debug Mode)", key="debug_mode")
-                st.text_input("Manuální název modelu:", key="manual_model_name")
+                st.text_input("Manuální název modelu:", key="input_model_name", value=st.session_state.persistent_model_name, on_change=sync_api_credentials)
                 if st.button("📋 Vylistovat dostupné modely", use_container_width=True):
                     test_key, _ = get_api_credentials()
                     if test_key:
                         try:
-                            import google.generativeai as genai
-                            genai.configure(api_key=test_key.strip())
-                            models = genai.list_models()
-                            model_names = [m.name for m in models]
+                            from google import genai
+                            client = genai.Client(api_key=test_key.strip())
+                            models = client.models.list()
+                            model_names = [m.name for m in models if hasattr(m, 'name')]
                             st.code("\n".join(model_names))
                         except Exception as e:
                             st.error(str(e))
@@ -1561,6 +1670,13 @@ else:
             if st.button("🗑️ Resetovat Historii", use_container_width=True):
                 st.session_state.analysis_history = []
                 st.success("Historie byla vymazána.")
+                st.rerun()
+            
+            if st.button("🔄 Obnovit výchozí klíč (ze secrets.toml)", use_container_width=True):
+                st.session_state.persistent_api_key = ""
+                if "input_api_key" in st.session_state:
+                    st.session_state.input_api_key = ""
+                st.success("Byl obnoven výchozí API klíč ze souboru secrets.toml.")
                 st.rerun()
 
     st.markdown("<br><br>", unsafe_allow_html=True)
