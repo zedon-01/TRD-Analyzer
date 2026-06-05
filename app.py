@@ -972,13 +972,13 @@ def generate_analysis(ticker_symbol, df, fundamentals, news=None):
     
     tech_str = f"""
     AKTUÁLNÍ HODNOTY:
-    Cena (Close): {last_row.get('Close', 0):.2f}
-    RSI (14): {last_row.get('RSI', 0):.2f}
-    MACD: {last_row.get('MACD', 0):.2f} (Signal: {last_row.get('MACD_Signal', 0):.2f}, Hist: {last_row.get('MACD_Hist', 0):.2f})
-    ADX (Trend Strength): {last_row.get('ADX', 0):.2f} (DI+: {last_row.get('DI_Plus', 0):.2f}, DI-: {last_row.get('DI_Minus', 0):.2f})
-    Bollinger Bands: High {last_row.get('BB_High', 0):.2f}, Low {last_row.get('BB_Low', 0):.2f}
-    SMA 50: {last_row.get('SMA_50', 0):.2f}
-    SMA 200: {last_row.get('SMA_200', 0):.2f}
+    Cena (Close): {float(last_row.get('Close', 0)):.2f}
+    RSI (14): {float(last_row.get('RSI', 0)):.2f}
+    MACD: {float(last_row.get('MACD', 0)):.2f} (Signal: {float(last_row.get('MACD_Signal', 0)):.2f}, Hist: {float(last_row.get('MACD_Hist', 0)):.2f})
+    ADX (Trend Strength): {float(last_row.get('ADX', 0)):.2f} (DI+: {float(last_row.get('DI_Plus', 0)):.2f}, DI-: {float(last_row.get('DI_Minus', 0)):.2f})
+    Bollinger Bands: High {float(last_row.get('BB_High', 0)):.2f}, Low {float(last_row.get('BB_Low', 0)):.2f}
+    SMA 50: {float(last_row.get('SMA_50', 0)):.2f}
+    SMA 200: {float(last_row.get('SMA_200', 0)):.2f}
     
     POSLEDNÍCH 10 SVÍČEK (PRICE ACTION):
     {recent_ohlc}
@@ -1047,7 +1047,11 @@ def generate_analysis(ticker_symbol, df, fundamentals, news=None):
             client = genai.Client(api_key=api_key)
             
             # Skip dynamic discovery which hangs due to Google API changes
-            models_to_try = ['gemini-2.5-flash', 'gemini-2.0-flash']
+            models_to_try = [
+                'gemini-flash-latest',
+                'gemini-3.5-flash',
+                'gemini-2.5-flash'
+            ]
             
             # Manual override priority
             if st.session_state.get("persistent_model_name"):
@@ -1072,7 +1076,10 @@ def generate_analysis(ticker_symbol, df, fundamentals, news=None):
                                 temperature=0.7
                             )
                         )
-                        return json.loads(response.text)
+                        text = response.text
+                        if "```json" in text: text = text.split("```json")[1].split("```")[0].strip()
+                        elif "```" in text: text = text.split("```")[1].split("```")[0].strip()
+                        return json.loads(text)
                     except Exception:
                         # Fallback to plain text
                         response = client.models.generate_content(
@@ -1095,8 +1102,9 @@ def generate_analysis(ticker_symbol, df, fundamentals, news=None):
             if last_err: 
                 if "429" in last_err or "quota" in last_err.lower():
                     st.error("⚠️ AI Limit: Google vás dočasně omezil (Too Many Requests). Počkejte minutu nebo použijte jiný klíč.")
-                else:
-                    st.error(f"AI selhala: {last_err}")
+                with open("scratch/error.log", "w") as f:
+                    f.write(f"Gemini API Error Trace: {str(last_err)}")
+                return {"error": f"Gemini API Error: {str(last_err)}"}
             return {}
             
     except Exception as e:
@@ -1400,10 +1408,15 @@ if st.session_state.current_page == "Dashboard":
                             news_context = news
 
                         # 3. AI Analysis
-                        status.write("⚡ Generuji finální posudek a setup...")
+                        status.write("⚡ Generuji finální posudek a setup... (Tento model může zpracovávat data 1-2 minuty, PROSÍM NEOBNOVUJTE STRÁNKU)")
+                        import time
+                        t0 = time.time()
                         ai_data = generate_analysis(ticker, df_processed, fundamentals, news=news_context)
-                    
-                        if ai_data:
+                        t1 = time.time()
+                        with open("scratch/success.log", "a") as f:
+                            f.write(f"[{time.strftime('%H:%M:%S')}] Generování trvalo {t1-t0:.1f}s. Keys: {list(ai_data.keys()) if isinstance(ai_data, dict) else 'Not a dict'}\n")
+                        
+                        if ai_data and "error" not in ai_data:
                             status.update(label="✅ Analýza dokončena!", state="complete", expanded=False)
                             st.session_state.ai_analysis_data = ai_data
                             st.session_state.current_analysis_ticker = f"{ticker}_{st.session_state.tf_interval}"
@@ -1421,6 +1434,8 @@ if st.session_state.current_page == "Dashboard":
                                 st.session_state.analysis_history.pop(0)
                         else:
                             status.update(label="❌ AI selhala", state="error", expanded=False)
+                            st.error(ai_data.get("error", "Neznámá chyba při generování analýzy."))
+                            st.session_state.ai_analysis_data = None
                                 
                     except Exception as e:
                         if "429" in str(e) or "Too Many Requests" in str(e):
@@ -1617,7 +1632,7 @@ else:
                                 client = genai.Client(api_key=test_key.strip())
                                 
                                 # Use hardcoded working model instead of dynamic discovery which hangs
-                                test_models = ['gemini-2.5-flash', 'gemini-2.0-flash']
+                                test_models = ['gemini-flash-latest', 'gemini-3.5-flash', 'gemini-2.5-flash']
                                 
                                 worked_model = None
                                 last_test_err = None
