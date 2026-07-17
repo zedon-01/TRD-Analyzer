@@ -941,7 +941,7 @@ def find_available_gemini_models(api_key):
 
     try:
         from google import genai
-        client = genai.Client(api_key=api_key, http_options={'timeout': 30.0})
+        client = genai.Client(api_key=api_key)
         available_models = []
         for m in client.models.list():
             if hasattr(m, 'name'):
@@ -1044,7 +1044,7 @@ def generate_analysis(ticker_symbol, df, fundamentals, news=None):
         elif provider == "Gemini":
             from google import genai
             from google.genai import types
-            client = genai.Client(api_key=api_key, http_options={'timeout': 30.0})
+            client = genai.Client(api_key=api_key)
             
             # Skip dynamic discovery which hangs due to Google API changes
             models_to_try = [
@@ -1132,7 +1132,7 @@ def chat_with_ai(prompt, analysis_data):
             return resp.choices[0].message.content
         else:
             from google import genai
-            client = genai.Client(api_key=api_key, http_options={'timeout': 30.0})
+            client = genai.Client(api_key=api_key)
             model_name = "gemini-2.5-flash"
             resp = client.models.generate_content(
                 model=model_name,
@@ -1629,7 +1629,7 @@ else:
                         try:
                             if test_provider == "Gemini":
                                 from google import genai
-                                client = genai.Client(api_key=test_key.strip(), http_options={'timeout': 30.0})
+                                client = genai.Client(api_key=test_key.strip())
                                 
                                 # Use hardcoded working model instead of dynamic discovery which hangs
                                 test_models = ['gemini-2.5-flash', 'gemini-flash-latest', 'gemini-3.5-flash']
@@ -1669,7 +1669,7 @@ else:
                     if test_key:
                         try:
                             from google import genai
-                            client = genai.Client(api_key=test_key.strip(), http_options={'timeout': 30.0})
+                            client = genai.Client(api_key=test_key.strip())
                             models = client.models.list()
                             model_names = [m.name for m in models if hasattr(m, 'name')]
                             st.code("\n".join(model_names))
