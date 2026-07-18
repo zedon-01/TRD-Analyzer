@@ -1224,6 +1224,17 @@ with st.sidebar:
             with st.expander("📂 Historie Analýz", expanded=False):
                 for i, hist in enumerate(reversed(st.session_state.analysis_history)):
                     if st.button(f"{hist['ticker']} ({hist['tf']}) - {hist['time']}", key=f"hist_{i}", use_container_width=True):
+                        st.session_state.current_ticker = hist['ticker']
+                        st.session_state.tf_interval = hist['tf']
+                        
+                        # Recalculate tf_period
+                        if hist['tf'] == "1m": st.session_state.tf_period = "7d"
+                        elif hist['tf'] in ["5m", "15m", "30m"]: st.session_state.tf_period = "60d"
+                        elif hist['tf'] == "1h": st.session_state.tf_period = "2y"
+                        elif hist['tf'] == "1mo": st.session_state.tf_period = "max"
+                        else: st.session_state.tf_period = "5y"
+                        
+                        st.session_state.current_analysis_ticker = f"{hist['ticker']}_{hist['tf']}"
                         st.session_state.ai_analysis_data = hist['data']
                         st.rerun()
 
