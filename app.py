@@ -10,6 +10,8 @@ from openai import OpenAI
 from google import genai
 from datetime import datetime, timedelta
 import pytz # Potřebné pro korektní časová pásma
+import os
+os.makedirs("scratch", exist_ok=True)
 
 # --- API Key Detection (Global Scope) ---
 def get_api_credentials():
