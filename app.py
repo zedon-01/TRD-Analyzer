@@ -65,7 +65,7 @@ if 'persistent_api_key' not in st.session_state or not st.session_state.persiste
 if 'persistent_api_provider' not in st.session_state:
     st.session_state.persistent_api_provider = ai_provider if ai_provider else "Gemini"
 if 'persistent_model_name' not in st.session_state:
-    st.session_state.persistent_model_name = "gemini-2.5-flash"
+    st.session_state.persistent_model_name = "gemini-3.5-flash"
 
 def sync_api_credentials():
     if "input_api_key" in st.session_state:
@@ -1055,70 +1055,92 @@ def generate_analysis(ticker_symbol, df, fundamentals, news=None):
             return json.loads(response.choices[0].message.content)
 
         elif provider == "Gemini":
-            from google import genai
-            from google.genai import types
-            client = genai.Client(api_key=api_key)
+            import subprocess
             
-            # Skip dynamic discovery which hangs due to Google API changes
-            models_to_try = [
-                'gemini-2.5-flash',
-                'gemini-flash-latest',
-                'gemini-3.5-flash'
-            ]
+            model_name = 'gemini-3.5-flash'
+            st.session_state.persistent_model_name = model_name
             
-            # Manual override priority
-            if st.session_state.get("persistent_model_name"):
-                m = st.session_state.persistent_model_name.strip()
-                m = m.replace('models/', '') # genai SDK doesn't need models/ prefix usually
-                if "1.5" in m or "pro" in m:
-                    m = "gemini-2.5-flash"
-                if m not in models_to_try: models_to_try.insert(0, m)
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
             
-            models_to_try = list(dict.fromkeys(models_to_try))
-            
-            last_err = None
-            for model_name in models_to_try:
+            try:
+                # Try with JSON mode first
+                payload = {
+                    "contents": [{"parts": [{"text": sys_prompt}]}],
+                    "generationConfig": {
+                        "temperature": 0.7,
+                        "responseMimeType": "application/json",
+                        "maxOutputTokens": 8192
+                    }
+                }
+                
+                payload_json = json.dumps(payload)
+                res = subprocess.run(
+                    ["curl", "-s", "-X", "POST", "-H", "Content-Type: application/json", "-d", payload_json, url],
+                    capture_output=True,
+                    text=True,
+                    timeout=45.0
+                )
+                
+                if res.returncode != 0:
+                    raise Exception(f"Curl failed with return code {res.returncode}: {res.stderr}")
+                    
+                resp_json = json.loads(res.stdout)
+                if "error" in resp_json:
+                    err_msg = resp_json["error"].get("message", str(resp_json["error"]))
+                    raise Exception(f"Gemini API Error: {err_msg}")
+                    
+                raw_text = resp_json["candidates"][0]["content"]["parts"][0]["text"]
+                
+                # Verify JSON parses correctly in first try, otherwise raise exception to trigger fallback
+                text = raw_text
+                if "```json" in text: text = text.split("```json")[1].split("```")[0].strip()
+                elif "```" in text: text = text.split("```")[1].split("```")[0].strip()
+                
+                res_json = json.loads(text)
+                return res_json
+            except Exception as e:
+                # Fallback to plain text
                 try:
-                    # Try with JSON mode first
-                    try:
-                        response = client.models.generate_content(
-                            model=model_name,
-                            contents=sys_prompt,
-                            config=types.GenerateContentConfig(
-                                response_mime_type="application/json",
-                                temperature=0.7
-                            )
-                        )
-                        text = response.text
-                        if "```json" in text: text = text.split("```json")[1].split("```")[0].strip()
-                        elif "```" in text: text = text.split("```")[1].split("```")[0].strip()
-                        return json.loads(text)
-                    except Exception:
-                        # Fallback to plain text
-                        response = client.models.generate_content(
-                            model=model_name,
-                            contents=sys_prompt,
-                            config=types.GenerateContentConfig(temperature=0.7)
-                        )
-                        text = response.text
-                        if "```json" in text: text = text.split("```json")[1].split("```")[0].strip()
-                        elif "```" in text: text = text.split("```")[1].split("```")[0].strip()
-                        start = text.find("{")
-                        end = text.rfind("}")
-                        if start != -1 and end != -1:
-                            text = text[start:end+1]
-                        return json.loads(text)
-                except Exception as e:
-                    last_err = str(e)
-                    continue
-            
-            if last_err: 
-                if "429" in last_err or "quota" in last_err.lower():
-                    st.error("⚠️ AI Limit: Google vás dočasně omezil (Too Many Requests). Počkejte minutu nebo použijte jiný klíč.")
-                with open("scratch/error.log", "w") as f:
-                    f.write(f"Gemini API Error Trace: {str(last_err)}")
-                return {"error": f"Gemini API Error: {str(last_err)}"}
-            return {}
+                    payload["generationConfig"] = {
+                        "temperature": 0.7,
+                        "maxOutputTokens": 8192
+                    } # Remove JSON mode
+                    payload_json = json.dumps(payload)
+                    res = subprocess.run(
+                        ["curl", "-s", "-X", "POST", "-H", "Content-Type: application/json", "-d", payload_json, url],
+                        capture_output=True,
+                        text=True,
+                        timeout=45.0
+                    )
+                    
+                    if res.returncode != 0:
+                        raise Exception(f"Curl failed with return code {res.returncode}: {res.stderr}")
+                        
+                    resp_json = json.loads(res.stdout)
+                    if "error" in resp_json:
+                        err_msg = resp_json["error"].get("message", str(resp_json["error"]))
+                        raise Exception(f"Gemini API Error: {err_msg}")
+                        
+                    raw_text = resp_json["candidates"][0]["content"]["parts"][0]["text"]
+                    
+                    text = raw_text
+                    if "```json" in text: text = text.split("```json")[1].split("```")[0].strip()
+                    elif "```" in text: text = text.split("```")[1].split("```")[0].strip()
+                    
+                    start = text.find("{")
+                    end = text.rfind("}")
+                    if start != -1 and end != -1:
+                        text = text[start:end+1]
+                        
+                    res_json = json.loads(text)
+                    return res_json
+                except Exception as fallback_e:
+                    last_err = str(fallback_e)
+                    if "429" in last_err or "quota" in last_err.lower() or "exhausted" in last_err.lower():
+                        st.error("⚠️ AI Limit: Google vás dočasně omezil (Too Many Requests). Počkejte minutu nebo použijte jiný klíč.")
+                    with open("scratch/error.log", "w") as f:
+                        f.write(f"Gemini API Error Trace: {last_err}\nText: {raw_text if 'raw_text' in locals() else ''}")
+                    return {"error": f"Gemini API Error: {last_err}"}
             
     except Exception as e:
         st.error(f"Chyba AI: {e}")
@@ -1146,7 +1168,7 @@ def chat_with_ai(prompt, analysis_data):
         else:
             from google import genai
             client = genai.Client(api_key=api_key)
-            model_name = "gemini-2.5-flash"
+            model_name = "gemini-3.5-flash"
             resp = client.models.generate_content(
                 model=model_name,
                 contents=f"Kontext: {context}\n\nUživatel se ptá: {prompt}"
@@ -1414,28 +1436,37 @@ if st.session_state.current_page == "Dashboard":
                     status = st.status("🧠 AI analyzuje trh...", expanded=True)
                     try:
                         # 1. Reuse existing fundamentals (or fetch if missing)
-                        status.write("🏢 Získávám fundamentální ukazatele...")
+                        step1 = status.empty()
+                        step1.markdown("⏳ 🏢 Získávám fundamentální ukazatele...")
                         try:
                             fundamentals = fetch_fundamentals(ticker)
+                            step1.markdown("✅ 🏢 Získávám fundamentální ukazatele...")
                         except Exception:
                             fundamentals = {}
-                            status.write("⚠️ Fundamenty nedostupné.")
+                            step1.markdown("⚠️ 🏢 Fundamenty nedostupné (pokračuji).")
 
                         # 2. Reuse existing news if available, or fetch
-                        status.write("📰 Prohledávám tržní zprávy...")
+                        step2 = status.empty()
+                        step2.markdown("⏳ 📰 Prohledávám tržní zprávy...")
                         if 'news' not in locals() or not news:
                             try:
                                 news_context = fetch_news(ticker)
+                                step2.markdown("✅ 📰 Prohledávám tržní zprávy...")
                             except Exception:
                                 news_context = []
+                                step2.markdown("⚠️ 📰 Tržní zprávy nedostupné (pokračuji).")
                         else:
                             news_context = news
+                            step2.markdown("✅ 📰 Prohledávám tržní zprávy...")
 
                         # 3. AI Analysis
-                        status.write("⚡ Generuji finální posudek a setup... (Tento model může zpracovávat data 1-2 minuty, PROSÍM NEOBNOVUJTE STRÁNKU)")
+                        step3 = status.empty()
+                        step3.markdown("⏳ ⚡ Generuji finální posudek a setup... (Tento model může zpracovávat data 1-2 minuty, PROSÍM NEOBNOVUJTE STRÁNKU)")
                         import time
                         t0 = time.time()
                         ai_data = generate_analysis(ticker, df_processed, fundamentals, news=news_context)
+                        if ai_data and "error" not in ai_data:
+                            step3.markdown("✅ ⚡ Generuji finální posudek a setup...")
                         t1 = time.time()
                         with open("scratch/success.log", "a") as f:
                             f.write(f"[{time.strftime('%H:%M:%S')}] Generování trvalo {t1-t0:.1f}s. Keys: {list(ai_data.keys()) if isinstance(ai_data, dict) else 'Not a dict'}\n")
