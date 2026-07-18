@@ -49,7 +49,7 @@ st.set_page_config(page_title="Trading Analyzer", layout="wide", initial_sidebar
 if 'current_page' not in st.session_state:
     st.session_state.current_page = "Dashboard"
 if 'watchlist' not in st.session_state:
-    st.session_state.watchlist = ["BTC-USD", "ETH-USD", "EURUSD=X", "GC=F"]
+    st.session_state.watchlist = ["BTC-USD", "ETH-USD", "EURUSD=X", "GC=F", "^IXIC"]
 if 'dxm_symbol' not in st.session_state:
     st.session_state.dxm_symbol = "EURUSD=X"
 if 'cot_symbol' not in st.session_state:
