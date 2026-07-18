@@ -954,6 +954,19 @@ def find_available_gemini_models(api_key):
     except Exception:
         return []
 
+
+import concurrent.futures
+
+def _do_generate(m, c_prompt, client):
+    from google.genai import types
+    return client.models.generate_content(
+        model=m,
+        contents=c_prompt,
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+        )
+    )
+
 def generate_analysis(ticker_symbol, df, fundamentals, news=None):
     """Main AI Engine for trading synthesis with dynamic model selection."""
     api_key, provider = get_api_credentials()
