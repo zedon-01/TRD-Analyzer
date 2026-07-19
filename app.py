@@ -67,7 +67,7 @@ if 'persistent_api_key' not in st.session_state or not st.session_state.persiste
 if 'persistent_api_provider' not in st.session_state:
     st.session_state.persistent_api_provider = ai_provider if ai_provider else "Gemini"
 if 'persistent_model_name' not in st.session_state:
-    st.session_state.persistent_model_name = "gemini-3.5-flash"
+    st.session_state.persistent_model_name = "gemini-2.5-flash"
 
 def sync_api_credentials():
     if "input_api_key" in st.session_state:
@@ -1059,7 +1059,7 @@ def generate_analysis(ticker_symbol, df, fundamentals, news=None):
         elif provider == "Gemini":
             import subprocess
             
-            model_name = 'gemini-3.5-flash'
+            model_name = 'gemini-2.5-flash'
             st.session_state.persistent_model_name = model_name
             
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
@@ -1170,7 +1170,7 @@ def chat_with_ai(prompt, analysis_data):
         else:
             from google import genai
             client = genai.Client(api_key=api_key)
-            model_name = "gemini-3.5-flash"
+            model_name = "gemini-2.5-flash"
             resp = client.models.generate_content(
                 model=model_name,
                 contents=f"Kontext: {context}\n\nUživatel se ptá: {prompt}"
@@ -1689,7 +1689,7 @@ else:
                                 client = genai.Client(api_key=test_key.strip())
                                 
                                 # Use hardcoded working model instead of dynamic discovery which hangs
-                                test_models = ['gemini-2.5-flash', 'gemini-flash-latest', 'gemini-3.5-flash']
+                                test_models = ['gemini-2.5-flash', 'gemini-flash-latest', 'gemini-2.0-flash']
                                 
                                 worked_model = None
                                 last_test_err = None
