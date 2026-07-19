@@ -1377,23 +1377,23 @@ if st.session_state.current_page == "Dashboard":
             # --- Main Chart Section ---
             st.markdown("<br>", unsafe_allow_html=True)
         
-            # TradingView-Style Timeframe Toolbar
-            tftimeframes = ["1m", "5m", "15m", "30m", "1h", "1d", "1wk", "1mo"]
-            cols_tf = st.columns(len(tftimeframes))
-            for i, tf in enumerate(tftimeframes):
-                is_active = st.session_state.tf_interval == tf
-                btn_label = f"**{tf}**" if is_active else tf
-                if cols_tf[i].button(btn_label, key=f"tf_btn_{tf}", use_container_width=True):
-                    st.session_state.tf_interval = tf
-                    if tf == "1m": st.session_state.tf_period = "7d"
-                    elif tf in ["5m", "15m", "30m"]: st.session_state.tf_period = "60d"
-                    elif tf == "1h": st.session_state.tf_period = "2y"
-                    else: st.session_state.tf_period = "1y"
-                    st.rerun()
+            with st.expander("📈 Graf trhu", expanded=True):
+                # TradingView-Style Timeframe Toolbar
+                tftimeframes = ["1m", "5m", "15m", "30m", "1h", "1d", "1wk", "1mo"]
+                cols_tf = st.columns(len(tftimeframes))
+                for i, tf in enumerate(tftimeframes):
+                    is_active = st.session_state.tf_interval == tf
+                    btn_label = f"**{tf}**" if is_active else tf
+                    if cols_tf[i].button(btn_label, key=f"tf_btn_{tf}", use_container_width=True):
+                        st.session_state.tf_interval = tf
+                        if tf == "1m": st.session_state.tf_period = "7d"
+                        elif tf in ["5m", "15m", "30m"]: st.session_state.tf_period = "60d"
+                        elif tf == "1h": st.session_state.tf_period = "2y"
+                        else: st.session_state.tf_period = "1y"
+                        st.rerun()
 
-            # Chart Display
-            fig = plot_chart(df_processed, ticker, chart_config)
-            with st.container(border=True):
+                # Chart Display
+                fig = plot_chart(df_processed, ticker, chart_config)
                 st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 
             # --- Technical Health Check Panel ---
