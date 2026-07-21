@@ -1424,6 +1424,10 @@ def generate_analysis(ticker_symbol, df, fundamentals, news=None):
     3. **Confidence Score (Pravděpodobnost)**: Základní hladina je 50 %. Nad 65 % se setup dostane POUZE při souladu Techniky + Fundamentu + Momenta (ADX > 25). Buď konzervativní.
     4. **Dynamické RRR**: Vyhledávej setupy s minimálním RRR 1:1.5 nebo 1:2. Pokud navrhneš RRR 1:1, musíš v obhajobě zdůraznit, že strategie vyžaduje extrémně vysokou úspěšnost (Win Rate).
     5. **Ekonomická Logika**: Špatná makro data pro danou zemi (nezaměstnanost, HDP) znamenají TLAK NA OSLABENÍ měny. Nehalucinuj o "prostoru pro nákup" bez jasného fundamentálního důvodu (např. spekulace na pivot banky).
+    6. **Pravidla pro přesný ENTRY, SL a TP (Smart Money Concepts & OTE)**:
+       - **ENTRY (Vstup)**: Musí ležet uvnitř nebo na těsné hranici vypočtené **GOLDEN ZONE FIBONACCI RETRACEMENT** (61.8% - 78.6%) a současně se krýt s aktivním Order Blockem (OB) nebo Fair Value Gapem (FVG). Vždy zvol precizní limitní cenu.
+       - **STOP LOSS (SL)**: Musí být umístěn dostatečně bezpečně až *za* nejbližším vnějším swingovým bodem (High/Low) nebo za nejbližším poolu likvidity (EQH/EQL), aby nedošlo k jeho snadnému vymetení při vymetání likvidity (Stop Run / Sweep). SL musí být vzdálen aspoň 1x ATR od vstupu.
+       - **TAKE PROFIT (TP)**: Cíle (TP1, TP2) musí ležet těsně *před* protilehlými pooly likvidity (EQH/EQL) nebo neotestovanými swingy, kam trh půjde sbírat likviditu. RRR musí být minimálně 1:1.5.
     
     ### VSTUPNÍ DATA:
     - TECHNICKÝ STAV: {tech_str}
