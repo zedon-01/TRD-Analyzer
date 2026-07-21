@@ -671,6 +671,87 @@ def detect_orderblocks(df, lookback=150):
     # Return last 3 to keep chart clean
     return bullish_obs[-3:], bearish_obs[-3:]
 
+def determine_htf_bias(ticker_symbol, current_interval):
+    """
+    Determines the higher timeframe trend bias (Bullish/Bearish/Neutral) 
+    using 4h or 1d data to ensure we do not trade against the HTF trend.
+    """
+    if current_interval in ["1m", "5m", "15m"]:
+        htf_interval = "1h"
+        htf_period = "1mo"
+    elif current_interval in ["30m", "1h"]:
+        htf_interval = "4h"
+        htf_period = "3mo"
+    elif current_interval == "4h":
+        htf_interval = "1d"
+        htf_period = "1y"
+    else: # 1d, 1wk, 1mo
+        htf_interval = "1wk"
+        htf_period = "5y"
+        
+    try:
+        df_htf = fetch_data(ticker_symbol, htf_period, htf_interval)
+        if df_htf.empty or len(df_htf) < 50:
+            df_htf = fetch_data(ticker_symbol, "1y", "1d")
+            
+        if not df_htf.empty and len(df_htf) >= 20:
+            df_htf = calculate_indicators(df_htf)
+            last_row = df_htf.iloc[-1]
+            close = last_row['Close']
+            sma50 = last_row.get('SMA_50')
+            sma200 = last_row.get('SMA_200')
+            
+            if sma50 is not None and sma200 is not None and not pd.isna(sma50) and not pd.isna(sma200):
+                if close > sma50 and close > sma200:
+                    return "Bullish", htf_interval
+                elif close < sma50 and close < sma200:
+                    return "Bearish", htf_interval
+                
+            slope = df_htf['Close'].tail(20).diff().mean()
+            if slope > 0:
+                return "Bullish (Slope)", htf_interval
+            elif slope < 0:
+                return "Bearish (Slope)", htf_interval
+                
+    except Exception:
+        pass
+        
+    return "Neutral / Range", "1d"
+
+def detect_session_liquidity(df):
+    """
+    Identifies Asian Session High/Low (00:00 - 08:00 UTC) and London Session High/Low (08:00 - 16:00 UTC).
+    """
+    if not isinstance(df.index, pd.DatetimeIndex):
+        return {"asian_high": None, "asian_low": None, "london_high": None, "london_low": None}
+        
+    try:
+        df_utc = df.copy()
+        if df_utc.index.tz is None:
+            df_utc.index = df_utc.index.tz_localize('UTC')
+        else:
+            df_utc.index = df_utc.index.tz_convert('UTC')
+    except Exception:
+        df_utc = df.copy()
+        
+    df_recent = df_utc.tail(200)
+    
+    asian_candles = df_recent[(df_recent.index.hour >= 0) & (df_recent.index.hour < 8)]
+    london_candles = df_recent[(df_recent.index.hour >= 8) & (df_recent.index.hour < 16)]
+    
+    asian_high = float(asian_candles['High'].max()) if not asian_candles.empty else None
+    asian_low = float(asian_candles['Low'].min()) if not asian_candles.empty else None
+    
+    london_high = float(london_candles['High'].max()) if not london_candles.empty else None
+    london_low = float(london_candles['Low'].min()) if not london_candles.empty else None
+    
+    return {
+        "asian_high": asian_high,
+        "asian_low": asian_low,
+        "london_high": london_high,
+        "london_low": london_low
+    }
+
 def detect_market_structure_elements(df, k=5):
     """
     Identifies Swing Highs & Lows, and detects BOS (Break of Structure) 
@@ -763,14 +844,14 @@ def detect_market_structure_elements(df, k=5):
 
 def detect_liquidity_pools(df, swing_highs, swing_lows, tolerance_pct=0.0015):
     """
-    Identifies Equal Highs (EQH) and Equal Lows (EQL) representing major liquidity pools,
-    and detects Liquidity Sweeps (stop hunts).
+    Identifies Equal Highs (EQH/BSL) and Equal Lows (EQL/SSL) representing major liquidity pools,
+    detects Session Liquidity levels, and detects BSL/SSL sweeps (including session high/low runs).
     """
     eqh = []
     eql = []
     sweeps = []
     
-    # 1. Detect Equal Highs (EQH)
+    # 1. Detect Equal Highs (EQH - BSL Pool)
     for i in range(len(swing_highs)):
         for j in range(i + 1, len(swing_highs)):
             p1 = swing_highs[i]["price"]
@@ -782,7 +863,7 @@ def detect_liquidity_pools(df, swing_highs, swing_lows, tolerance_pct=0.0015):
                     "points": [swing_highs[i]["time"], swing_highs[j]["time"]]
                 })
                 
-    # 2. Detect Equal Lows (EQL)
+    # 2. Detect Equal Lows (EQL - SSL Pool)
     for i in range(len(swing_lows)):
         for j in range(i + 1, len(swing_lows)):
             p1 = swing_lows[i]["price"]
@@ -794,7 +875,10 @@ def detect_liquidity_pools(df, swing_highs, swing_lows, tolerance_pct=0.0015):
                     "points": [swing_lows[i]["time"], swing_lows[j]["time"]]
                 })
 
-    # 3. Detect Liquidity Sweeps
+    # Get session levels
+    sessions = detect_session_liquidity(df)
+
+    # 3. Detect Sweeps (BSL/SSL and Sessions)
     lookback = min(30, len(df))
     closes = df['Close'].values
     highs = df['High'].values
@@ -806,42 +890,93 @@ def detect_liquidity_pools(df, swing_highs, swing_lows, tolerance_pct=0.0015):
         active_sh = [sh for sh in swing_highs if sh["index"] < i]
         active_sl = [sl for sl in swing_lows if sl["index"] < i]
         
-        if not active_sh or not active_sl:
-            continue
+        # Check standard Swing High/Low sweeps
+        if active_sh and active_sl:
+            recent_sh_price = active_sh[-1]["price"]
+            recent_sl_price = active_sl[-1]["price"]
             
-        recent_sh_price = active_sh[-1]["price"]
-        recent_sl_price = active_sl[-1]["price"]
-        
-        # Bearish Liquidity Sweep (Sweep of Buy-side Liquidity)
-        if highs[i] > recent_sh_price and closes[i] < recent_sh_price:
-            upper_shadow = highs[i] - max(opens[i], closes[i])
-            body = abs(closes[i] - opens[i])
-            if upper_shadow > 1.5 * body:
-                sweeps.append({
-                    "type": "Buy-side Sweep (Bearish)",
-                    "time": times[i],
-                    "swept_level": recent_sh_price,
-                    "high": float(highs[i]),
-                    "close": float(closes[i])
-                })
-                
-        # Bullish Liquidity Sweep (Sweep of Sell-side Liquidity)
-        if lows[i] < recent_sl_price and closes[i] > recent_sl_price:
-            lower_shadow = min(opens[i], closes[i]) - lows[i]
-            body = abs(closes[i] - opens[i])
-            if lower_shadow > 1.5 * body:
-                sweeps.append({
-                    "type": "Sell-side Sweep (Bullish)",
-                    "time": times[i],
-                    "swept_level": recent_sl_price,
-                    "low": float(lows[i]),
-                    "close": float(closes[i])
-                })
+            # Bearish Swing Sweep (BSL Sweep)
+            if highs[i] > recent_sh_price and closes[i] < recent_sh_price:
+                upper_shadow = highs[i] - max(opens[i], closes[i])
+                body = abs(closes[i] - opens[i])
+                if upper_shadow > 1.2 * body:
+                    sweeps.append({
+                        "type": "BSL Sweep (Bearish Rejection)",
+                        "time": times[i],
+                        "swept_level": recent_sh_price,
+                        "high": float(highs[i]),
+                        "close": float(closes[i])
+                    })
+                    
+            # Bullish Swing Sweep (SSL Sweep)
+            if lows[i] < recent_sl_price and closes[i] > recent_sl_price:
+                lower_shadow = min(opens[i], closes[i]) - lows[i]
+                body = abs(closes[i] - opens[i])
+                if lower_shadow > 1.2 * body:
+                    sweeps.append({
+                        "type": "SSL Sweep (Bullish Rejection)",
+                        "time": times[i],
+                        "swept_level": recent_sl_price,
+                        "low": float(lows[i]),
+                        "close": float(closes[i])
+                    })
+                    
+        # Check Session High/Low sweeps
+        body = abs(closes[i] - opens[i])
+        if body > 0:
+            # Asian High sweep (BSL)
+            ah = sessions.get("asian_high")
+            if ah and highs[i] > ah and closes[i] < ah:
+                if (highs[i] - max(opens[i], closes[i])) > 1.2 * body:
+                    sweeps.append({
+                        "type": "Asian High BSL Sweep (Bearish)",
+                        "time": times[i],
+                        "swept_level": ah,
+                        "high": float(highs[i]),
+                        "close": float(closes[i])
+                    })
+                    
+            # Asian Low sweep (SSL)
+            al = sessions.get("asian_low")
+            if al and lows[i] < al and closes[i] > al:
+                if (min(opens[i], closes[i]) - lows[i]) > 1.2 * body:
+                    sweeps.append({
+                        "type": "Asian Low SSL Sweep (Bullish)",
+                        "time": times[i],
+                        "swept_level": al,
+                        "low": float(lows[i]),
+                        "close": float(closes[i])
+                    })
+
+            # London High sweep (BSL)
+            lh = sessions.get("london_high")
+            if lh and highs[i] > lh and closes[i] < lh:
+                if (highs[i] - max(opens[i], closes[i])) > 1.2 * body:
+                    sweeps.append({
+                        "type": "London High BSL Sweep (Bearish)",
+                        "time": times[i],
+                        "swept_level": lh,
+                        "high": float(highs[i]),
+                        "close": float(closes[i])
+                    })
+
+            # London Low sweep (SSL)
+            ll = sessions.get("london_low")
+            if ll and lows[i] < ll and closes[i] > ll:
+                if (min(opens[i], closes[i]) - lows[i]) > 1.2 * body:
+                    sweeps.append({
+                        "type": "London Low SSL Sweep (Bullish)",
+                        "time": times[i],
+                        "swept_level": ll,
+                        "low": float(lows[i]),
+                        "close": float(closes[i])
+                    })
 
     return {
         "equal_highs": eqh[-3:],
         "equal_lows": eql[-3:],
-        "sweeps": sweeps[-5:]
+        "sweeps": sweeps[-5:],
+        "session_levels": sessions
     }
 
 def detect_execution_zones(df, lookback=100):
@@ -1345,34 +1480,50 @@ def generate_analysis(ticker_symbol, df, fundamentals, news=None):
     # Calculate synthetic sentiment context
     l_pct, s_pct = calculate_synthetic_sentiment(df)
     sentiment_context = f"Syntetický sentiment (DXM/COT Model): {l_pct}% Long vs {s_pct}% Short"
-
-    # --- ADVANCED QUANTITATIVE ENGINES ---
+    # 1. Multi-Timeframe Trend Bias
+    htf_bias, htf_tf = determine_htf_bias(ticker_symbol, st.session_state.tf_interval)
+    
+    # 2. Market Structure
     struct_data = detect_market_structure_elements(df)
     bos_str = "\n".join([f"- {b['type']} na hladině {b['broken_level']:.5f} ({b['time']})" for b in struct_data["bos"]]) if struct_data["bos"] else "Žádné recentní BOS"
     choch_str = "\n".join([f"- {c['type']} na hladině {c['broken_level']:.5f} ({c['time']})" for c in struct_data["choch"]]) if struct_data["choch"] else "Žádné recentní CHoCH"
     
     struct_summary = f"""
-    Aktuální tržní struktura: {struct_data['current_structure']}
+    Aktuální tržní struktura (nižší TF): {struct_data['current_structure']}
+    Hlavní trendový bias na vyšším TF ({htf_tf}): {htf_bias}
     Poslední zlom struktury (BOS):
     {bos_str}
     Poslední změna charakteru (CHoCH):
     {choch_str}
     """
     
+    # 3. Liquidity Engine & Sessions
     liq_data = detect_liquidity_pools(df, struct_data["swing_highs"], struct_data["swing_lows"])
-    eqh_str = "\n".join([f"- EQH na hladině {e['price']:.5f} ({', '.join([str(p) for p in e['points']])})" for e in liq_data["equal_highs"]]) if liq_data["equal_highs"] else "Žádné zřejmé EQH"
-    eql_str = "\n".join([f"- EQL na hladině {e['price']:.5f} ({', '.join([str(p) for p in e['points']])})" for e in liq_data["equal_lows"]]) if liq_data["equal_lows"] else "Žádné zřejmé EQL"
-    sweeps_str = "\n".join([f"- {s['type']} na hladině {s['swept_level']:.5f} (Čas: {s['time']}, High/Low knotu: {s['high'] if 'high' in s else s['low']:.5f})" for s in liq_data["sweeps"]]) if liq_data["sweeps"] else "Žádné recentní vymetení likvidity"
+    eqh_str = "\n".join([f"- EQH (BSL) na hladině {e['price']:.5f} ({', '.join([str(p) for p in e['points']])})" for e in liq_data["equal_highs"]]) if liq_data["equal_highs"] else "Žádné zřejmé EQH (BSL)"
+    eql_str = "\n".join([f"- EQL (SSL) na hladině {e['price']:.5f} ({', '.join([str(p) for p in e['points']])})" for e in liq_data["equal_lows"]]) if liq_data["equal_lows"] else "Žádné zřejmé EQL (SSL)"
+    sweeps_str = "\n".join([f"- {s['type']} na hladině {s['swept_level']:.5f} (Čas: {s['time']}, High/Low: {s['high'] if 'high' in s else s['low']:.5f})" for s in liq_data["sweeps"]]) if liq_data["sweeps"] else "Žádné recentní vymetení likvidity"
+    
+    sessions_data = liq_data.get("session_levels", {})
+    asian_h_p = f"{sessions_data.get('asian_high')}" if sessions_data.get('asian_high') else "N/A"
+    asian_l_p = f"{sessions_data.get('asian_low')}" if sessions_data.get('asian_low') else "N/A"
+    london_h_p = f"{sessions_data.get('london_high')}" if sessions_data.get('london_high') else "N/A"
+    london_l_p = f"{sessions_data.get('london_low')}" if sessions_data.get('london_low') else "N/A"
     
     liq_summary = f"""
-    Equal Highs (EQH - Pools likvidity):
+    Buy-Side Liquidity (BSL / EQH):
     {eqh_str}
-    Equal Lows (EQL - Pools likvidity):
+    Sell-Side Liquidity (SSL / EQL):
     {eql_str}
+    Likvidita obchodních seancí (Session Liquidity):
+    - Asijské maximum (Asian High BSL): {asian_h_p}
+    - Asijské minimum (Asian Low SSL): {asian_l_p}
+    - Londýnské maximum (London High BSL): {london_h_p}
+    - Londýnské minimum (London Low SSL): {london_l_p}
     Poslední vymetení likvidity (Liquidity Sweeps):
     {sweeps_str}
     """
     
+    # 4. Execution Zones
     zone_data = detect_execution_zones(df)
     fvg_str = "\n".join([f"- {f['type']} mezi {f['bottom']:.5f} a {f['top']:.5f} ({f['time']})" for f in zone_data["fvg"] if not f["mitigated"]]) if zone_data["fvg"] else "Všechny FVG v lookbacku zaplněny"
     bull_ob_str = "\n".join([f"- Bullish OB: zóna {ob['bottom']:.5f} - {ob['top']:.5f} ({ob['start']}) [{'Mitigován' if ob['mitigated'] else 'Nemitigován'}]" for ob in zone_data["bullish_obs"]]) if zone_data["bullish_obs"] else "Žádné Bullish OB"
@@ -1386,6 +1537,7 @@ def generate_analysis(ticker_symbol, df, fundamentals, news=None):
     {bear_ob_str}
     """
     
+    # 5. Volume & Mathematical Filters
     vol_filters = calculate_volume_filters(df)
     vol_summary = f"""
     VSA Analýza (Volume Spread Analysis): {vol_filters['vsa_state']}
@@ -1393,7 +1545,7 @@ def generate_analysis(ticker_symbol, df, fundamentals, news=None):
     Poměr objemu k MA(20): {vol_filters['vol_ma_ratio']}x
     """
 
-    # 5. Golden Zone calculation
+    # 6. Golden Zone calculation
     gz_str = ""
     if struct_data["swing_highs"] and struct_data["swing_lows"]:
         last_sh = struct_data["swing_highs"][-1]["price"]
@@ -1414,20 +1566,27 @@ def generate_analysis(ticker_symbol, df, fundamentals, news=None):
         gz_str = "Nedostatek swing bodů pro výpočet."
 
     sys_prompt = f"""
-    Jsi špičkový kvantitativní analytik pro institucionální hedge-fond. Tvým úkolem je provést nekompromisní RIGORÓZNÍ AUDIT instrumentu {ticker_symbol}.
+    Jsi špičkový kvantitativní analytik pro institucionální hedge-fond. Tvým úkolem je provést nekompromisní RIGORÓZNÍ AUDIT instrumentu {ticker_symbol} s využitím metodologie Smart Money Concepts (SMC) a Multi-Timeframe (MTF) analýzy.
     
     ### ZÁVAZNÁ PRAVIDLA PRO ANALÝZU:
     1. **Vážení Fundament vs. Technika**: Fundament má VŽDY vyšší váhu. Pokud jde technický signál (např. RSI nákup) proti silnému negativnímu fundamentu (např. špatné HDP), NESMÍŠ doporučit Long. V takovém případě musíš snížit skóre o 20 % a do analýzy vložit varování: "CONTRARIAN TRADE - HIGH RISK".
-    2. **Interpretace Trendu (ADX & SMA)**: 
-       - Pokud je ADX < 20, trh je v KONSOLIDACI (range). Nesmíš psát o silném trendu.
-       - Pokud je cena POD SMA 50 i SMA 200, trend je silně medvědí. Nákupní setup (Long) v této situaci vyžaduje extrémní potvrzení (např. silný fundament + RSI divergence).
-    3. **Confidence Score (Pravděpodobnost)**: Základní hladina je 50 %. Nad 65 % se setup dostane POUZE při souladu Techniky + Fundamentu + Momenta (ADX > 25). Buď konzervativní.
-    4. **Dynamické RRR**: Vyhledávej setupy s minimálním RRR 1:1.5 nebo 1:2. Pokud navrhneš RRR 1:1, musíš v obhajobě zdůraznit, že strategie vyžaduje extrémně vysokou úspěšnost (Win Rate).
-    5. **Ekonomická Logika**: Špatná makro data pro danou zemi (nezaměstnanost, HDP) znamenají TLAK NA OSLABENÍ měny. Nehalucinuj o "prostoru pro nákup" bez jasného fundamentálního důvodu (např. spekulace na pivot banky).
-    6. **Pravidla pro přesný ENTRY, SL a TP (Smart Money Concepts & OTE)**:
-       - **ENTRY (Vstup)**: Musí ležet uvnitř nebo na těsné hranici vypočtené **GOLDEN ZONE FIBONACCI RETRACEMENT** (61.8% - 78.6%) a současně se krýt s aktivním Order Blockem (OB) nebo Fair Value Gapem (FVG). Vždy zvol precizní limitní cenu.
-       - **STOP LOSS (SL)**: Musí být umístěn dostatečně bezpečně až *za* nejbližším vnějším swingovým bodem (High/Low) nebo za nejbližším poolu likvidity (EQH/EQL), aby nedošlo k jeho snadnému vymetení při vymetání likvidity (Stop Run / Sweep). SL musí být vzdálen aspoň 1x ATR od vstupu.
-       - **TAKE PROFIT (TP)**: Cíle (TP1, TP2) musí ležet těsně *před* protilehlými pooly likvidity (EQH/EQL) nebo neotestovanými swingy, kam trh půjde sbírat likviditu. RRR musí být minimálně 1:1.5.
+    2. **Multi-Timeframe (MTF) Bias a CHoCH**:
+       - Vyšší timeframe ({htf_tf}) určuje hlavní směr trhu (SMC Trend Bias: {htf_bias}).
+       - Nikdy negeneruj obchody proti hlavnímu vyššímu trendovému biasu (např. SHORT v Bullish trendu), DOKUD na nižším timeframe neproběhne zřetelná změna charakteru trendu (CHoCH - Change of Character).
+    3. **Detekce Reakce na Vymetení Likvidity (Direction Bias)**:
+       - Sleduj sweeps: Pokud cena vymetla Sell-Side Likviditu (SSL, např. EQL, Asian Low, London Low) a vykazuje rychlou býčí reakci (Bullish Rejection Sweep) směřující k zaplnění FVG gapu výše, vyhodnoť to jako příležitost pro **LONG (Reakce na Sweep)**, i když je celkový trend podle indikátorů klesající.
+       - Stejně tak pro vymetení Buy-Side Likvidity (BSL) a návrat dolů: vyhodnoť to jako **SHORT (Reakce na Sweep)**.
+    4. **Premium vs. Discount zóny**:
+       - **SHORT (Prodej)**: Vstupujeme výhradně v **PREMIUM** zóně (nad 50% Fibonacciho retracementu, ideálně v rozmezí Golden Zone 61.8% - 78.6% celkového impulsu). Chceme prodávat drahé.
+       - **LONG (Nákup)**: Vstupujeme výhradně v **DISCOUNT** zóně (pod 50% Fibonacciho retracementu, ideálně v rozmezí Golden Zone 61.8% - 78.6% celkového impulsu). Chceme kupovat levné.
+    5. **Pravidla pro přesný ENTRY, SL a TP (SMC Invalidation)**:
+       - **ENTRY (Vstup)**: Musí ležet přesně v příslušné zóně (Premium pro Short / Discount pro Long) v Golden Zone a krýt se s unmitigovaným Order Blockem (OB) nebo Fair Value Gapem (FVG).
+       - **STOP LOSS (SL)**: Musí být co nejtěsnější pro vysoké RRR. Umísti ho těsně za invalidační úroveň SMC (tj. těsně za opačný konec Order Blocku, FVG zóny nebo swingového HH/LL, který způsobil zlom struktury BOS/CHoCH) s drobným offsetem na spread (např. 1-2 pips). **NIKDY neumisťuj SL na nebo do blízkosti poolů likvidity (EQH/EQL)**, protože ty jsou magnetem pro trh a instituce je záměrně vymete!
+       - **TAKE PROFIT (TP)**: Cíle se umisťují těsně PŘED protilehlé pooly likvidity (EQH/EQL, asijské/londýnské high/low), protože tam chceme vybrat zisk z jejich vymetení.
+    6. **Pravidlo minimálního RRR >= 1:2.5**:
+       - Každý doporučený setup (LONG nebo SHORT) **musí** splňovat poměr Risk-to-Reward (RRR) minimálně **1:2.5** (ideálně 1:3 a více).
+       - Pokud po započtení strukturálního Stop Lossu a cílového Take Profitu u nejbližší likvidity nevychází RRR aspoň 1:2.5, **NESMÍŠ** doporučit obchod a musíš vrátit směr `direction: "WAIT"`.
+    7. **Ekonomická Logika**: Špatná makro data pro danou zemi (nezaměstnanost, HDP) znamenají TLAK NA OSLABENÍ měny. Nehalucinuj o "prostoru pro nákup" bez jasného fundamentálního důvodu (např. spekulace na pivot banky).
     
     ### VSTUPNÍ DATA:
     - TECHNICKÝ STAV: {tech_str}
@@ -1835,6 +1994,11 @@ if st.session_state.current_page == "Dashboard":
                     s_color = "#10B981" if ms_elements["current_structure"] == "Bullish" else ("#EF4444" if ms_elements["current_structure"] == "Bearish" else "#64748B")
                     st.markdown(f"Struktura: <span style='background:{s_color}22; color:{s_color}; padding:3px 8px; border-radius:4px; font-weight:bold;'>{ms_elements['current_structure']}</span>", unsafe_allow_html=True)
                     
+                    # Fetch HTF trend bias
+                    htf_bias, htf_tf = determine_htf_bias(ticker, st.session_state.tf_interval)
+                    h_color = "#10B981" if "Bullish" in htf_bias else ("#EF4444" if "Bearish" in htf_bias else "#64748B")
+                    st.markdown(f"HTF Bias ({htf_tf}): <span style='color:{h_color}; font-weight:bold;'>{htf_bias}</span>", unsafe_allow_html=True)
+
                     st.write("**Poslední zlom (BOS):**")
                     if ms_elements["bos"]:
                         last_b = ms_elements["bos"][-1]
@@ -1851,13 +2015,21 @@ if st.session_state.current_page == "Dashboard":
                 
                 with col_ui2:
                     st.markdown("<b style='font-size:1.1rem;'>Likvidita & Bloky</b>", unsafe_allow_html=True)
+                    
+                    st.write("**Seance (Session Liquidity):**")
+                    s_levels = lp_elements.get("session_levels", {})
+                    if s_levels.get("asian_high"):
+                        st.markdown(f"🌏 **Asian Range:** `{s_levels.get('asian_low'):.5f} - {s_levels.get('asian_high'):.5f}`")
+                    if s_levels.get("london_high"):
+                        st.markdown(f"🌍 **London Range:** `{s_levels.get('london_low'):.5f} - {s_levels.get('london_high'):.5f}`")
+
                     st.write("**Pools likvidity (EQH/EQL):**")
                     eq_found = False
                     if lp_elements["equal_highs"]:
-                        st.markdown(f"🟢 **EQH:** `{lp_elements['equal_highs'][-1]['price']:.5f}`")
+                        st.markdown(f"🟢 **EQH (BSL):** `{lp_elements['equal_highs'][-1]['price']:.5f}`")
                         eq_found = True
                     if lp_elements["equal_lows"]:
-                        st.markdown(f"🔴 **EQL:** `{lp_elements['equal_lows'][-1]['price']:.5f}`")
+                        st.markdown(f"🔴 **EQL (SSL):** `{lp_elements['equal_lows'][-1]['price']:.5f}`")
                         eq_found = True
                     if not eq_found:
                         st.write("Žádné významné EQH/EQL")
