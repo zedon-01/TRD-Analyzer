@@ -671,6 +671,345 @@ def detect_orderblocks(df, lookback=150):
     # Return last 3 to keep chart clean
     return bullish_obs[-3:], bearish_obs[-3:]
 
+def detect_market_structure_elements(df, k=5):
+    """
+    Identifies Swing Highs & Lows, and detects BOS (Break of Structure) 
+    and CHoCH (Change of Character).
+    """
+    if len(df) < 2 * k + 1:
+        return {
+            "swing_highs": [], "swing_lows": [],
+            "bos": [], "choch": [],
+            "current_structure": "Neutral"
+        }
+    
+    df_ms = df.copy()
+    highs = df_ms['High'].values
+    lows = df_ms['Low'].values
+    closes = df_ms['Close'].values
+    times = df_ms.index
+    
+    swing_highs = []
+    swing_lows = []
+    
+    # 1. Identify Swing Points
+    for i in range(k, len(df_ms) - k):
+        is_high = True
+        is_low = True
+        for j in range(1, k + 1):
+            if highs[i] <= highs[i - j] or highs[i] <= highs[i + j]:
+                is_high = False
+            if lows[i] >= lows[i - j] or lows[i] >= lows[i + j]:
+                is_low = False
+        
+        if is_high:
+            swing_highs.append({"index": i, "time": times[i], "price": float(highs[i])})
+        if is_low:
+            swing_lows.append({"index": i, "time": times[i], "price": float(lows[i])})
+
+    # 2. Track BOS and CHoCH
+    bos = []
+    choch = []
+    
+    if not swing_highs or not swing_lows:
+        return {
+            "swing_highs": swing_highs, "swing_lows": swing_lows,
+            "bos": [], "choch": [],
+            "current_structure": "Neutral"
+        }
+        
+    last_high = swing_highs[0]["price"]
+    last_low = swing_lows[0]["price"]
+    
+    trend = 0 # 1 = Bullish, -1 = Bearish, 0 = Neutral
+    
+    for i in range(max(swing_highs[0]["index"], swing_lows[0]["index"]) + 1, len(df_ms)):
+        close_p = float(closes[i])
+        
+        active_highs = [sh for sh in swing_highs if sh["index"] < i]
+        active_lows = [sl for sl in swing_lows if sl["index"] < i]
+        
+        if not active_highs or not active_lows:
+            continue
+            
+        recent_sh = active_highs[-1]
+        recent_sl = active_lows[-1]
+        
+        # Bullish break
+        if close_p > recent_sh["price"]:
+            if trend == 1:
+                bos.append({"type": "BOS (Bullish)", "time": times[i], "broken_level": recent_sh["price"], "close": close_p})
+            elif trend == -1 or trend == 0:
+                choch.append({"type": "CHoCH (Bullish Reversal)", "time": times[i], "broken_level": recent_sh["price"], "close": close_p})
+                trend = 1
+                
+        # Bearish break
+        elif close_p < recent_sl["price"]:
+            if trend == -1:
+                bos.append({"type": "BOS (Bearish)", "time": times[i], "broken_level": recent_sl["price"], "close": close_p})
+            elif trend == 1 or trend == 0:
+                choch.append({"type": "CHoCH (Bearish Reversal)", "time": times[i], "broken_level": recent_sl["price"], "close": close_p})
+                trend = -1
+
+    current_structure = "Bullish" if trend == 1 else ("Bearish" if trend == -1 else "Neutral")
+    
+    return {
+        "swing_highs": swing_highs[-10:],
+        "swing_lows": swing_lows[-10:],
+        "bos": bos[-5:],
+        "choch": choch[-5:],
+        "current_structure": current_structure
+    }
+
+def detect_liquidity_pools(df, swing_highs, swing_lows, tolerance_pct=0.0015):
+    """
+    Identifies Equal Highs (EQH) and Equal Lows (EQL) representing major liquidity pools,
+    and detects Liquidity Sweeps (stop hunts).
+    """
+    eqh = []
+    eql = []
+    sweeps = []
+    
+    # 1. Detect Equal Highs (EQH)
+    for i in range(len(swing_highs)):
+        for j in range(i + 1, len(swing_highs)):
+            p1 = swing_highs[i]["price"]
+            p2 = swing_highs[j]["price"]
+            diff = abs(p1 - p2) / max(p1, p2)
+            if diff <= tolerance_pct:
+                eqh.append({
+                    "price": round((p1 + p2) / 2, 5),
+                    "points": [swing_highs[i]["time"], swing_highs[j]["time"]]
+                })
+                
+    # 2. Detect Equal Lows (EQL)
+    for i in range(len(swing_lows)):
+        for j in range(i + 1, len(swing_lows)):
+            p1 = swing_lows[i]["price"]
+            p2 = swing_lows[j]["price"]
+            diff = abs(p1 - p2) / max(p1, p2)
+            if diff <= tolerance_pct:
+                eql.append({
+                    "price": round((p1 + p2) / 2, 5),
+                    "points": [swing_lows[i]["time"], swing_lows[j]["time"]]
+                })
+
+    # 3. Detect Liquidity Sweeps
+    lookback = min(30, len(df))
+    closes = df['Close'].values
+    highs = df['High'].values
+    lows = df['Low'].values
+    opens = df['Open'].values
+    times = df.index
+    
+    for i in range(len(df) - lookback, len(df)):
+        active_sh = [sh for sh in swing_highs if sh["index"] < i]
+        active_sl = [sl for sl in swing_lows if sl["index"] < i]
+        
+        if not active_sh or not active_sl:
+            continue
+            
+        recent_sh_price = active_sh[-1]["price"]
+        recent_sl_price = active_sl[-1]["price"]
+        
+        # Bearish Liquidity Sweep (Sweep of Buy-side Liquidity)
+        if highs[i] > recent_sh_price and closes[i] < recent_sh_price:
+            upper_shadow = highs[i] - max(opens[i], closes[i])
+            body = abs(closes[i] - opens[i])
+            if upper_shadow > 1.5 * body:
+                sweeps.append({
+                    "type": "Buy-side Sweep (Bearish)",
+                    "time": times[i],
+                    "swept_level": recent_sh_price,
+                    "high": float(highs[i]),
+                    "close": float(closes[i])
+                })
+                
+        # Bullish Liquidity Sweep (Sweep of Sell-side Liquidity)
+        if lows[i] < recent_sl_price and closes[i] > recent_sl_price:
+            lower_shadow = min(opens[i], closes[i]) - lows[i]
+            body = abs(closes[i] - opens[i])
+            if lower_shadow > 1.5 * body:
+                sweeps.append({
+                    "type": "Sell-side Sweep (Bullish)",
+                    "time": times[i],
+                    "swept_level": recent_sl_price,
+                    "low": float(lows[i]),
+                    "close": float(closes[i])
+                })
+
+    return {
+        "equal_highs": eqh[-3:],
+        "equal_lows": eql[-3:],
+        "sweeps": sweeps[-5:]
+    }
+
+def detect_execution_zones(df, lookback=100):
+    """
+    Detects unmitigated Fair Value Gaps (FVG) and Order Blocks (OB) in the market.
+    """
+    fvg = []
+    
+    closes = df['Close'].values
+    highs = df['High'].values
+    lows = df['Low'].values
+    opens = df['Open'].values
+    times = df.index
+    
+    start_idx = max(2, len(df) - lookback)
+    
+    for i in range(start_idx, len(df)):
+        # Bullish FVG
+        if opens[i-1] < closes[i-1] and lows[i] > highs[i-2]:
+            gap_top = float(lows[i])
+            gap_bottom = float(highs[i-2])
+            
+            mitigated = False
+            for j in range(i + 1, len(df)):
+                if lows[j] <= gap_bottom:
+                    mitigated = True
+                    break
+                    
+            if not mitigated:
+                fvg.append({
+                    "type": "Bullish FVG",
+                    "time": times[i-1],
+                    "top": gap_top,
+                    "bottom": gap_bottom,
+                    "mitigated": False
+                })
+                
+        # Bearish FVG
+        elif opens[i-1] > closes[i-1] and highs[i] < lows[i-2]:
+            gap_top = float(lows[i-2])
+            gap_bottom = float(highs[i])
+            
+            mitigated = False
+            for j in range(i + 1, len(df)):
+                if highs[j] >= gap_top:
+                    mitigated = True
+                    break
+                    
+            if not mitigated:
+                fvg.append({
+                    "type": "Bearish FVG",
+                    "time": times[i-1],
+                    "top": gap_top,
+                    "bottom": gap_bottom,
+                    "mitigated": False
+                })
+
+    bullish_obs_raw, bearish_obs_raw = detect_orderblocks(df, lookback=lookback)
+    
+    bullish_obs = []
+    bearish_obs = []
+    
+    for ob in bullish_obs_raw:
+        try:
+            o_start = ob['start']
+            # Find index if possible
+            start_pos = -1
+            for idx, val in enumerate(df.index):
+                if val == o_start:
+                    start_pos = idx
+                    break
+            
+            if start_pos != -1:
+                mitigated = False
+                for j in range(start_pos + 2, len(df)):
+                    if df['Low'].iloc[j] <= ob['top']:
+                        mitigated = True
+                        break
+                ob['mitigated'] = mitigated
+            else:
+                ob['mitigated'] = False
+            bullish_obs.append(ob)
+        except Exception:
+            ob['mitigated'] = False
+            bullish_obs.append(ob)
+            
+    for ob in bearish_obs_raw:
+        try:
+            o_start = ob['start']
+            start_pos = -1
+            for idx, val in enumerate(df.index):
+                if val == o_start:
+                    start_pos = idx
+                    break
+            
+            if start_pos != -1:
+                mitigated = False
+                for j in range(start_pos + 2, len(df)):
+                    if df['High'].iloc[j] >= ob['bottom']:
+                        mitigated = True
+                        break
+                ob['mitigated'] = mitigated
+            else:
+                ob['mitigated'] = False
+            bearish_obs.append(ob)
+        except Exception:
+            ob['mitigated'] = False
+            bearish_obs.append(ob)
+            
+    return {
+        "fvg": fvg[-5:],
+        "bullish_obs": bullish_obs,
+        "bearish_obs": bearish_obs
+    }
+
+def calculate_volume_filters(df, window=20):
+    """
+    Computes Volume Spread Analysis (VSA) states and ATR volatility compression filters.
+    """
+    if len(df) < window:
+        return {"vsa_state": "Neutral", "atr_filter": "Normal Volatility", "atr_value": 0.0, "vol_ma_ratio": 1.0}
+        
+    df_vol = df.copy()
+    
+    high_low = df_vol['High'] - df_vol['Low']
+    high_close = abs(df_vol['High'] - df_vol['Close'].shift())
+    low_close = abs(df_vol['Low'] - df_vol['Close'].shift())
+    ranges = pd.concat([high_low, high_close, low_close], axis=1)
+    true_range = ranges.max(axis=1)
+    atr = true_range.rolling(14).mean()
+    
+    df_vol['ATR'] = atr
+    df_vol['Volume_MA'] = df_vol['Volume'].rolling(window).mean()
+    df_vol['Volume_Std'] = df_vol['Volume'].rolling(window).std()
+    
+    last_row = df_vol.iloc[-1]
+    last_vol = float(last_row['Volume'])
+    last_vol_ma = float(last_row['Volume_MA'])
+    last_vol_std = float(last_row['Volume_Std']) if not pd.isna(last_row['Volume_Std']) else 1.0
+    
+    last_range = float(last_row['High'] - last_row['Low'])
+    last_atr = float(last_row['ATR']) if not pd.isna(last_row['ATR']) else 1.0
+    
+    vsa_state = "Normal Volume & Spread"
+    if last_vol > last_vol_ma + 2.0 * last_vol_std:
+        if last_range > 1.5 * last_atr:
+            vsa_state = "Volume Climax (Strong Spread Breakout)"
+        else:
+            vsa_state = "Volume Churn / Absorption (High Volume, Low Spread)"
+    elif last_vol < 0.5 * last_vol_ma:
+        if last_range < 0.5 * last_atr:
+            vsa_state = "No Demand / No Supply (Volume & Volatility Compression)"
+        else:
+            vsa_state = "Low Volume Breakout (Weak Participation)"
+            
+    atr_filter = "Normal Volatility"
+    if last_atr > 0 and last_range / last_atr > 1.5:
+        atr_filter = "Expansion (High Volatility)"
+    elif last_atr > 0 and last_range / last_atr < 0.6:
+        atr_filter = "Compression (Low Volatility)"
+        
+    return {
+        "vsa_state": vsa_state,
+        "atr_filter": atr_filter,
+        "atr_value": round(last_atr, 5),
+        "vol_ma_ratio": round(last_vol / last_vol_ma, 2) if last_vol_ma > 0 else 1.0
+    }
+
 def plot_chart(df, ticker_symbol, config=None):
     """Creates a comprehensive Plotly chart dynamically based on config."""
     if config is None:
@@ -1007,6 +1346,53 @@ def generate_analysis(ticker_symbol, df, fundamentals, news=None):
     l_pct, s_pct = calculate_synthetic_sentiment(df)
     sentiment_context = f"Syntetický sentiment (DXM/COT Model): {l_pct}% Long vs {s_pct}% Short"
 
+    # --- ADVANCED QUANTITATIVE ENGINES ---
+    struct_data = detect_market_structure_elements(df)
+    bos_str = "\n".join([f"- {b['type']} na hladině {b['broken_level']:.5f} ({b['time']})" for b in struct_data["bos"]]) if struct_data["bos"] else "Žádné recentní BOS"
+    choch_str = "\n".join([f"- {c['type']} na hladině {c['broken_level']:.5f} ({c['time']})" for c in struct_data["choch"]]) if struct_data["choch"] else "Žádné recentní CHoCH"
+    
+    struct_summary = f"""
+    Aktuální tržní struktura: {struct_data['current_structure']}
+    Poslední zlom struktury (BOS):
+    {bos_str}
+    Poslední změna charakteru (CHoCH):
+    {choch_str}
+    """
+    
+    liq_data = detect_liquidity_pools(df, struct_data["swing_highs"], struct_data["swing_lows"])
+    eqh_str = "\n".join([f"- EQH na hladině {e['price']:.5f} ({', '.join([str(p) for p in e['points']])})" for e in liq_data["equal_highs"]]) if liq_data["equal_highs"] else "Žádné zřejmé EQH"
+    eql_str = "\n".join([f"- EQL na hladině {e['price']:.5f} ({', '.join([str(p) for p in e['points']])})" for e in liq_data["equal_lows"]]) if liq_data["equal_lows"] else "Žádné zřejmé EQL"
+    sweeps_str = "\n".join([f"- {s['type']} na hladině {s['swept_level']:.5f} (Čas: {s['time']}, High/Low knotu: {s['high'] if 'high' in s else s['low']:.5f})" for s in liq_data["sweeps"]]) if liq_data["sweeps"] else "Žádné recentní vymetení likvidity"
+    
+    liq_summary = f"""
+    Equal Highs (EQH - Pools likvidity):
+    {eqh_str}
+    Equal Lows (EQL - Pools likvidity):
+    {eql_str}
+    Poslední vymetení likvidity (Liquidity Sweeps):
+    {sweeps_str}
+    """
+    
+    zone_data = detect_execution_zones(df)
+    fvg_str = "\n".join([f"- {f['type']} mezi {f['bottom']:.5f} a {f['top']:.5f} ({f['time']})" for f in zone_data["fvg"] if not f["mitigated"]]) if zone_data["fvg"] else "Všechny FVG v lookbacku zaplněny"
+    bull_ob_str = "\n".join([f"- Bullish OB: zóna {ob['bottom']:.5f} - {ob['top']:.5f} ({ob['start']}) [{'Mitigován' if ob['mitigated'] else 'Nemitigován'}]" for ob in zone_data["bullish_obs"]]) if zone_data["bullish_obs"] else "Žádné Bullish OB"
+    bear_ob_str = "\n".join([f"- Bearish OB: zóna {ob['bottom']:.5f} - {ob['top']:.5f} ({ob['start']}) [{'Mitigován' if ob['mitigated'] else 'Nemitigován'}]" for ob in zone_data["bearish_obs"]]) if zone_data["bearish_obs"] else "Žádné Bearish OB"
+    
+    zones_summary = f"""
+    Nezaplněné neefektivity (Unmitigated FVGs):
+    {fvg_str}
+    Order Blocks (OB):
+    {bull_ob_str}
+    {bear_ob_str}
+    """
+    
+    vol_filters = calculate_volume_filters(df)
+    vol_summary = f"""
+    VSA Analýza (Volume Spread Analysis): {vol_filters['vsa_state']}
+    ATR (14) Volatilitní filtr: {vol_filters['atr_filter']} (ATR hodnota: {vol_filters['atr_value']:.5f})
+    Poměr objemu k MA(20): {vol_filters['vol_ma_ratio']}x
+    """
+
     sys_prompt = f"""
     Jsi špičkový kvantitativní analytik pro institucionální hedge-fond. Tvým úkolem je provést nekompromisní RIGORÓZNÍ AUDIT instrumentu {ticker_symbol}.
     
@@ -1021,6 +1407,10 @@ def generate_analysis(ticker_symbol, df, fundamentals, news=None):
     
     ### VSTUPNÍ DATA:
     - TECHNICKÝ STAV: {tech_str}
+    - ADVANCED MARKET STRUCTURE: {struct_summary}
+    - LIQUIDITY ENGINE DATA: {liq_summary}
+    - EXECUTION ZONES (FVG & OB): {zones_summary}
+    - VOLUME & MATHEMATICAL FILTERS: {vol_summary}
     - SENTIMENT TRHU: {sentiment_context}
     - FUNDAMENTY: {fund_str}
     - ZPRÁVY: {news_str}
@@ -1395,6 +1785,74 @@ if st.session_state.current_page == "Dashboard":
                 # Chart Display
                 fig = plot_chart(df_processed, ticker, chart_config)
                 st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+
+            # --- Advanced Market Structure UI Widget ---
+            with st.expander("🔍 Pokročilá Tržní Struktura & Likvidita", expanded=False):
+                st.markdown("<h4 style='margin-top:0;'>Strukturální a objemová diagnostika</h4>", unsafe_allow_html=True)
+                
+                # Calculate metrics
+                ms_elements = detect_market_structure_elements(df_processed)
+                lp_elements = detect_liquidity_pools(df_processed, ms_elements["swing_highs"], ms_elements["swing_lows"])
+                ez_elements = detect_execution_zones(df_processed)
+                v_filters = calculate_volume_filters(df_processed)
+                
+                col_ui1, col_ui2, col_ui3 = st.columns(3)
+                with col_ui1:
+                    st.markdown("<b style='font-size:1.1rem;'>Tržní struktura</b>", unsafe_allow_html=True)
+                    s_color = "#10B981" if ms_elements["current_structure"] == "Bullish" else ("#EF4444" if ms_elements["current_structure"] == "Bearish" else "#64748B")
+                    st.markdown(f"Struktura: <span style='background:{s_color}22; color:{s_color}; padding:3px 8px; border-radius:4px; font-weight:bold;'>{ms_elements['current_structure']}</span>", unsafe_allow_html=True)
+                    
+                    st.write("**Poslední zlom (BOS):**")
+                    if ms_elements["bos"]:
+                        last_b = ms_elements["bos"][-1]
+                        st.markdown(f"<span style='color:#38BDF8;'>{last_b['type']}</span> na `{last_b['broken_level']:.5f}`", unsafe_allow_html=True)
+                    else:
+                        st.write("Žádný v lookbacku")
+                        
+                    st.write("**Změna charakteru (CHoCH):**")
+                    if ms_elements["choch"]:
+                        last_c = ms_elements["choch"][-1]
+                        st.markdown(f"<span style='color:#FBBF24;'>{last_c['type']}</span> na `{last_c['broken_level']:.5f}`", unsafe_allow_html=True)
+                    else:
+                        st.write("Žádná v lookbacku")
+                
+                with col_ui2:
+                    st.markdown("<b style='font-size:1.1rem;'>Likvidita & Bloky</b>", unsafe_allow_html=True)
+                    st.write("**Pools likvidity (EQH/EQL):**")
+                    eq_found = False
+                    if lp_elements["equal_highs"]:
+                        st.markdown(f"🟢 **EQH:** `{lp_elements['equal_highs'][-1]['price']:.5f}`")
+                        eq_found = True
+                    if lp_elements["equal_lows"]:
+                        st.markdown(f"🔴 **EQL:** `{lp_elements['equal_lows'][-1]['price']:.5f}`")
+                        eq_found = True
+                    if not eq_found:
+                        st.write("Žádné významné EQH/EQL")
+                        
+                    st.write("**Order Blocks (Aktivní):**")
+                    active_obs = [ob for ob in ez_elements["bullish_obs"] + ez_elements["bearish_obs"] if not ob.get("mitigated", False)]
+                    if active_obs:
+                        for ob in active_obs[-2:]:
+                            ob_type = "Bullish" if ob in ez_elements["bullish_obs"] else "Bearish"
+                            ob_color = "#10B981" if ob_type == "Bullish" else "#EF4444"
+                            st.markdown(f"<span style='color:{ob_color};'>{ob_type} OB</span>: `{ob['bottom']:.5f} - {ob['top']:.5f}`", unsafe_allow_html=True)
+                    else:
+                        st.write("Žádné neotestované OB")
+                        
+                with col_ui3:
+                    st.markdown("<b style='font-size:1.1rem;'>Neefektivity & Objem</b>", unsafe_allow_html=True)
+                    st.write("**Fair Value Gaps (FVG):**")
+                    active_fvgs = [f for f in ez_elements["fvg"] if not f["mitigated"]]
+                    if active_fvgs:
+                        for fvg in active_fvgs[-2:]:
+                            fvg_color = "#10B981" if "Bullish" in fvg["type"] else "#EF4444"
+                            st.markdown(f"<span style='color:{fvg_color};'>{fvg['type']}</span>: `{fvg['bottom']:.5f} - {fvg['top']:.5f}`", unsafe_allow_html=True)
+                    else:
+                        st.write("Všechny FVG zaplněny")
+                        
+                    st.write("**Objem a ATR:**")
+                    st.markdown(f"VSA stav: **{v_filters['vsa_state']}**")
+                    st.markdown(f"ATR stav: **{v_filters['atr_filter']}** (ATR: `{v_filters['atr_value']:.5f}`)")
 
             # --- Technical Health Check Panel ---
             tech_signals = get_technical_signals(df_processed)
