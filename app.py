@@ -1393,6 +1393,26 @@ def generate_analysis(ticker_symbol, df, fundamentals, news=None):
     Poměr objemu k MA(20): {vol_filters['vol_ma_ratio']}x
     """
 
+    # 5. Golden Zone calculation
+    gz_str = ""
+    if struct_data["swing_highs"] and struct_data["swing_lows"]:
+        last_sh = struct_data["swing_highs"][-1]["price"]
+        last_sl = struct_data["swing_lows"][-1]["price"]
+        gz_range = abs(last_sh - last_sl)
+        
+        if struct_data['current_structure'] == "Bullish":
+            gz_top = last_sh - 0.5 * gz_range
+            gz_bottom = last_sh - 0.786 * gz_range
+            gz_opt_start = last_sh - 0.618 * gz_range
+            gz_str = f"NÁKUPNÍ RETRACEMENT (Discount): zóna {gz_bottom:.5f} - {gz_opt_start:.5f} (Fibonacci hladiny: 50%={gz_top:.5f}, 61.8%={gz_opt_start:.5f}, 78.6%={gz_bottom:.5f})"
+        else:
+            gz_bottom = last_sl + 0.5 * gz_range
+            gz_top = last_sl + 0.786 * gz_range
+            gz_opt_start = last_sl + 0.618 * gz_range
+            gz_str = f"PRODEJNÍ RETRACEMENT (Premium): zóna {gz_opt_start:.5f} - {gz_top:.5f} (Fibonacci hladiny: 50%={gz_bottom:.5f}, 61.8%={gz_opt_start:.5f}, 78.6%={gz_top:.5f})"
+    else:
+        gz_str = "Nedostatek swing bodů pro výpočet."
+
     sys_prompt = f"""
     Jsi špičkový kvantitativní analytik pro institucionální hedge-fond. Tvým úkolem je provést nekompromisní RIGORÓZNÍ AUDIT instrumentu {ticker_symbol}.
     
@@ -1411,6 +1431,7 @@ def generate_analysis(ticker_symbol, df, fundamentals, news=None):
     - LIQUIDITY ENGINE DATA: {liq_summary}
     - EXECUTION ZONES (FVG & OB): {zones_summary}
     - VOLUME & MATHEMATICAL FILTERS: {vol_summary}
+    - GOLDEN ZONE FIBONACCI RETRACEMENT: {gz_str}
     - SENTIMENT TRHU: {sentiment_context}
     - FUNDAMENTY: {fund_str}
     - ZPRÁVY: {news_str}
@@ -1424,6 +1445,14 @@ def generate_analysis(ticker_symbol, df, fundamentals, news=None):
         "sl": "Hladina invalidace setupu (Pokud WAIT, napiš 'N/A')",
         "rationale": "Důkladné 3-4 věty vysvětlující konfluenci indikátorů, NEBO zdůvodnění proč se má čekat (WAIT).",
         "when_to_ask_again": "Napiš, za jakých podmínek se má uživatel znovu zeptat (např. 'Až cena dosáhne X', 'Za 2 hodiny' atd.). Pokud je to LONG/SHORT, napiš 'N/A'."
+      }},
+      "golden_zone": {{
+        "range": "Vypočtená cenová hladina nebo zóna (např. '1.1410 - 1.1435') odpovídající Fibonacciho 61.8% - 78.6% retracementu",
+        "rationale": "Krátké 2-3 věty vysvětlující, proč je tato zóna důležitá a jak na ni cena reaguje vzhledem k trendu a struktuře."
+      }},
+      "liquidity_setup": {{
+        "buy_liquidity_placement": "Kam a jak doporučuješ nastavit nákupní limity/objednávky vzhledem k pools likvidity a EQL (např. 'Nákupní limit na 1.1400 těsně pod EQL pro zachycení stop runu' nebo 'N/A')",
+        "sell_liquidity_placement": "Kam a jak doporučuješ nastavit prodejní limity/objednávky vzhledem k pools likvidity a EQH (např. 'Prodejní limit na 1.1480 těsně nad EQH' nebo 'N/A')"
       }},
       "sentiment_score": Číslo od -100 (Bearish) do 100 (Bullish),
       "confidence_pct": Číslo od 0 do 100 (Reálná pravděpodobnost úspěchu dle pravidel výše),
@@ -2049,6 +2078,19 @@ if st.session_state.current_page == "Dashboard":
                 
                 with st.expander("⚖️ Syntéza a Rigorózní Obhajoba"):
                     st.write(ai_data.get("synthesis_and_defense", "Data nenalezena."))
+            
+                # --- Golden Zone & Liquidity placement expanders ---
+                golden_zone = ai_data.get("golden_zone", {})
+                if golden_zone:
+                    with st.expander("🏆 Zlatá Retracement Zóna (Golden Zone)"):
+                        st.markdown(f"**Rozpětí (Fibonacci 61.8% - 78.6%):** `{golden_zone.get('range', 'N/A')}`")
+                        st.markdown(f"**Zdůvodnění a chování ceny:**\n{golden_zone.get('rationale', 'Data nenalezena.')}")
+                
+                liq_setup = ai_data.get("liquidity_setup", {})
+                if liq_setup:
+                    with st.expander("💧 Nastavení Likvidity & Limitních Hladin"):
+                        st.markdown(f"🎯 **Nákupní likvidita (Buy Limit orders):**\n{liq_setup.get('buy_liquidity_placement', 'N/A')}")
+                        st.markdown(f"🎯 **Prodejní likvidita (Sell Limit orders):**\n{liq_setup.get('sell_liquidity_placement', 'N/A')}")
             
                 if setup and setup.get("rationale"):
                     st.markdown(f'<div style="background: rgba(56, 189, 248, 0.1); border-left: 4px solid #38BDF8; padding: 16px; border-radius: 8px; margin-bottom: 25px;"><span style="color: #38BDF8; font-weight: 700; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 1px;">🧠 Logika setupu</span><br><div style="color: #E2E8F0; font-size: 0.95rem; margin-top: 8px; line-height: 1.5;">{str(setup.get("rationale")).strip()}</div></div>', unsafe_allow_html=True)
