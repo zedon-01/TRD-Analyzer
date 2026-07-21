@@ -1576,9 +1576,9 @@ def generate_analysis(ticker_symbol, df, fundamentals, news=None):
     3. **Detekce Reakce na Vymetení Likvidity (Direction Bias)**:
        - Sleduj sweeps: Pokud cena vymetla Sell-Side Likviditu (SSL, např. EQL, Asian Low, London Low) a vykazuje rychlou býčí reakci (Bullish Rejection Sweep) směřující k zaplnění FVG gapu výše, vyhodnoť to jako příležitost pro **LONG (Reakce na Sweep)**, i když je celkový trend podle indikátorů klesající.
        - Stejně tak pro vymetení Buy-Side Likvidity (BSL) a návrat dolů: vyhodnoť to jako **SHORT (Reakce na Sweep)**.
-    4. **Premium vs. Discount zóny**:
-       - **SHORT (Prodej)**: Vstupujeme výhradně v **PREMIUM** zóně (nad 50% Fibonacciho retracementu, ideálně v rozmezí Golden Zone 61.8% - 78.6% celkového impulsu). Chceme prodávat drahé.
-       - **LONG (Nákup)**: Vstupujeme výhradně v **DISCOUNT** zóně (pod 50% Fibonacciho retracementu, ideálně v rozmezí Golden Zone 61.8% - 78.6% celkového impulsu). Chceme kupovat levné.
+    4. **Premium vs. Discount zóny (ZÁSADNÍ METODOLOGICKÉ PRAVIDLO)**:
+       - **SHORT (Prodej)**: Vstupujeme VÝHRADNĚ v **PREMIUM** zóně (horní polovina swing range, nad 50% Fibonacciho retracementu, ideálně v Golden Zone 61.8% - 78.6%). Prodáváme drahé! Je absolutně vyloučeno a metodologicky chybné mluvit o 'vstupu z discount ceny' u shortu. SHORT = VŽDY PREMIUM.
+       - **LONG (Nákup)**: Vstupujeme VÝHRADNĚ v **DISCOUNT** zóně (spodní polovina swing range, pod 50% Fibonacciho retracementu, ideálně v Golden Zone 61.8% - 78.6%). Kupujeme levné! Je absolutně vyloučeno a metodologicky chybné mluvit o 'vstupu z premium ceny' u longu. LONG = VŽDY DISCOUNT.
     5. **Pravidla pro přesný ENTRY, SL a TP (SMC Invalidation)**:
        - **ENTRY (Vstup)**: Musí ležet přesně v příslušné zóně (Premium pro Short / Discount pro Long) v Golden Zone a krýt se s unmitigovaným Order Blockem (OB) nebo Fair Value Gapem (FVG).
        - **STOP LOSS (SL)**: Musí být co nejtěsnější pro vysoké RRR. Umísti ho těsně za invalidační úroveň SMC (tj. těsně za opačný konec Order Blocku, FVG zóny nebo swingového HH/LL, který způsobil zlom struktury BOS/CHoCH) s drobným offsetem na spread (např. 1-2 pips). **NIKDY neumisťuj SL na nebo do blízkosti poolů likvidity (EQH/EQL)**, protože ty jsou magnetem pro trh a instituce je záměrně vymete!
@@ -1610,8 +1610,8 @@ def generate_analysis(ticker_symbol, df, fundamentals, news=None):
         "when_to_ask_again": "Napiš, za jakých podmínek se má uživatel znovu zeptat (např. 'Až cena dosáhne X', 'Za 2 hodiny' atd.). Pokud je to LONG/SHORT, napiš 'N/A'."
       }},
       "golden_zone": {{
-        "range": "Vypočtená cenová hladina nebo zóna (např. '1.1410 - 1.1435') odpovídající Fibonacciho 61.8% - 78.6% retracementu",
-        "rationale": "Krátké 2-3 věty vysvětlující, proč je tato zóna důležitá a jak na ni cena reaguje vzhledem k trendu a struktuře."
+        "range": "Vypočtená cenová hladina nebo zóna (např. '1.1410 - 1.1435') odpovídající Fibonacciho 61.8% - 78.6% retracementu (musí být PREMIUM pro Short a DISCOUNT pro Long)",
+        "rationale": "Krátké 2-3 věty vysvětlující, proč je tato zóna důležitá a jak na ni cena reaguje vzhledem k trendu a struktuře (rozlišuj přísně Premium pro Short a Discount pro Long)."
       }},
       "liquidity_setup": {{
         "buy_liquidity_placement": "Kam a jak doporučuješ nastavit nákupní limity/objednávky vzhledem k pools likvidity a EQL (např. 'Nákupní limit na 1.1400 těsně pod EQL pro zachycení stop runu' nebo 'N/A')",
