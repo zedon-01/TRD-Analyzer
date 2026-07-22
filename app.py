@@ -1641,54 +1641,24 @@ def generate_analysis(ticker_symbol, df, fundamentals, news=None):
         elif provider == "Gemini":
             import subprocess
             
-            model_name = 'gemini-2.5-flash'
-            st.session_state.persistent_model_name = model_name
+            models_to_try = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash']
+            last_err = None
             
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
-            
-            try:
-                # Try with JSON mode first
-                payload = {
-                    "contents": [{"parts": [{"text": sys_prompt}]}],
-                    "generationConfig": {
-                        "temperature": 0.7,
-                        "responseMimeType": "application/json",
-                        "maxOutputTokens": 8192
-                    }
-                }
+            # Phase 1: Try JSON mode for each model
+            for model_name in models_to_try:
+                st.session_state.persistent_model_name = model_name
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
                 
-                payload_json = json.dumps(payload)
-                res = subprocess.run(
-                    ["curl", "-s", "-X", "POST", "-H", "Content-Type: application/json", "-d", payload_json, url],
-                    capture_output=True,
-                    text=True,
-                    timeout=45.0
-                )
-                
-                if res.returncode != 0:
-                    raise Exception(f"Curl failed with return code {res.returncode}: {res.stderr}")
-                    
-                resp_json = json.loads(res.stdout)
-                if "error" in resp_json:
-                    err_msg = resp_json["error"].get("message", str(resp_json["error"]))
-                    raise Exception(f"Gemini API Error: {err_msg}")
-                    
-                raw_text = resp_json["candidates"][0]["content"]["parts"][0]["text"]
-                
-                # Verify JSON parses correctly in first try, otherwise raise exception to trigger fallback
-                text = raw_text
-                if "```json" in text: text = text.split("```json")[1].split("```")[0].strip()
-                elif "```" in text: text = text.split("```")[1].split("```")[0].strip()
-                
-                res_json = json.loads(text)
-                return res_json
-            except Exception as e:
-                # Fallback to plain text
                 try:
-                    payload["generationConfig"] = {
-                        "temperature": 0.7,
-                        "maxOutputTokens": 8192
-                    } # Remove JSON mode
+                    payload = {
+                        "contents": [{"parts": [{"text": sys_prompt}]}],
+                        "generationConfig": {
+                            "temperature": 0.7,
+                            "responseMimeType": "application/json",
+                            "maxOutputTokens": 8192
+                        }
+                    }
+                    
                     payload_json = json.dumps(payload)
                     res = subprocess.run(
                         ["curl", "-s", "-X", "POST", "-H", "Content-Type: application/json", "-d", payload_json, url],
@@ -1698,12 +1668,51 @@ def generate_analysis(ticker_symbol, df, fundamentals, news=None):
                     )
                     
                     if res.returncode != 0:
-                        raise Exception(f"Curl failed with return code {res.returncode}: {res.stderr}")
+                        raise Exception(f"Curl failed with return code {res.returncode}")
                         
                     resp_json = json.loads(res.stdout)
                     if "error" in resp_json:
                         err_msg = resp_json["error"].get("message", str(resp_json["error"]))
-                        raise Exception(f"Gemini API Error: {err_msg}")
+                        raise Exception(f"API Error for {model_name}: {err_msg}")
+                        
+                    raw_text = resp_json["candidates"][0]["content"]["parts"][0]["text"]
+                    
+                    text = raw_text
+                    if "```json" in text: text = text.split("```json")[1].split("```")[0].strip()
+                    elif "```" in text: text = text.split("```")[1].split("```")[0].strip()
+                    
+                    res_json = json.loads(text)
+                    return res_json
+                except Exception as e:
+                    last_err = str(e)
+                    continue
+            
+            # Phase 2: If JSON mode failed for all, try plain-text fallback mode for each model
+            for model_name in models_to_try:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+                try:
+                    payload = {
+                        "contents": [{"parts": [{"text": sys_prompt}]}],
+                        "generationConfig": {
+                            "temperature": 0.7,
+                            "maxOutputTokens": 8192
+                        }
+                    }
+                    payload_json = json.dumps(payload)
+                    res = subprocess.run(
+                        ["curl", "-s", "-X", "POST", "-H", "Content-Type: application/json", "-d", payload_json, url],
+                        capture_output=True,
+                        text=True,
+                        timeout=45.0
+                    )
+                    
+                    if res.returncode != 0:
+                        raise Exception(f"Curl failed with return code {res.returncode}")
+                        
+                    resp_json = json.loads(res.stdout)
+                    if "error" in resp_json:
+                        err_msg = resp_json["error"].get("message", str(resp_json["error"]))
+                        raise Exception(f"API Error for {model_name}: {err_msg}")
                         
                     raw_text = resp_json["candidates"][0]["content"]["parts"][0]["text"]
                     
@@ -1720,11 +1729,17 @@ def generate_analysis(ticker_symbol, df, fundamentals, news=None):
                     return res_json
                 except Exception as fallback_e:
                     last_err = str(fallback_e)
-                    if "429" in last_err or "quota" in last_err.lower() or "exhausted" in last_err.lower():
-                        st.error("⚠️ AI Limit: Google vás dočasně omezil (Too Many Requests). Počkejte minutu nebo použijte jiný klíč.")
-                    with open("scratch/error.log", "w") as f:
-                        f.write(f"Gemini API Error Trace: {last_err}\nText: {raw_text if 'raw_text' in locals() else ''}")
-                    return {"error": f"Gemini API Error: {last_err}"}
+                    continue
+            
+            # If everything failed:
+            if "429" in last_err or "quota" in last_err.lower() or "exhausted" in last_err.lower():
+                st.error("⚠️ AI Limit: Google vás dočasně omezil (Too Many Requests). Počkejte minutu nebo použijte jiný klíč.")
+            elif "demand" in last_err.lower() or "overloaded" in last_err.lower() or "503" in last_err:
+                st.error("⚠️ AI Server: Model má právě příliš vysokou zátěž (High Demand). Zkuste to za chvíli nebo použijte OpenAI.")
+            
+            with open("scratch/error.log", "w") as f:
+                f.write(f"Gemini API Error Trace: {last_err}")
+            return {"error": f"Gemini API Error: {last_err}"}
             
     except Exception as e:
         st.error(f"Chyba AI: {e}")
