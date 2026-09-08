@@ -14,7 +14,7 @@ import os
 import re
 os.makedirs("scratch", exist_ok=True)
 
-DEPRECATED_GEMINI_MODELS = {"gemini-1.5-flash", "gemini-1.5-flash-latest", "gemini-2.0-flash", "models/gemini-1.5-flash", "gemini-pro", "models/gemini-pro"}
+DEPRECATED_GEMINI_MODELS = {"gemini-1.5-flash", "gemini-1.5-flash-latest", "gemini-2.0-flash", "models/gemini-1.5-flash", "gemini-pro", "models/gemini-pro", "gemini-2.5-pro", "models/gemini-2.5-pro", "gemini-flash-latest"}
 
 # --- API Key Detection (Global Scope) ---
 def get_api_credentials():
@@ -1703,8 +1703,8 @@ def generate_analysis(ticker_symbol, df, fundamentals, news=None):
         elif provider == "Gemini":
             import subprocess
             
-            # Active supported models (gemini-1.5-flash and gemini-2.0-flash are deprecated/removed)
-            models_to_try = ['gemini-2.5-flash', 'gemini-3.6-flash', 'gemini-2.5-pro', 'gemini-flash-latest']
+            # Active verified models
+            models_to_try = ['gemini-2.5-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-flash-lite-latest', 'gemini-2.5-flash-lite']
             user_model = st.session_state.get('persistent_model_name', '').strip()
             if user_model in DEPRECATED_GEMINI_MODELS:
                 user_model = 'gemini-2.5-flash'
