@@ -59,7 +59,7 @@ if 'manual_api_key' not in st.session_state:
 if 'manual_api_provider' not in st.session_state:
     st.session_state.manual_api_provider = "Gemini"
 if 'manual_model_name' not in st.session_state:
-    st.session_state.manual_model_name = "gemini-1.5-flash-latest"
+    st.session_state.manual_model_name = "gemini-2.5-flash"
 
 # No base64 needed, pure CSS logo used.
 
@@ -970,7 +970,7 @@ def generate_analysis(ticker_symbol, df, fundamentals, news=None):
             # Dynamic Model Discovery
             models_to_try = find_available_gemini_models(api_key)
             if not models_to_try:
-                models_to_try = ['gemini-1.5-flash', 'gemini-pro']
+                models_to_try = ['gemini-2.5-flash', 'gemini-3.6-flash']
             
             # Manual override priority
             if st.session_state.get("manual_model_name"):
@@ -1034,7 +1034,7 @@ def chat_with_ai(prompt, analysis_data):
             genai.configure(api_key=api_key)
             # Use cached model or discovery
             models = find_available_gemini_models(api_key)
-            model_name = models[0] if models else "gemini-1.5-flash"
+            model_name = models[0] if models else "gemini-2.5-flash"
             model = genai.GenerativeModel(model_name)
             resp = model.generate_content(f"Kontext: {context}\n\nUživatel se ptá: {prompt}")
             return resp.text
@@ -1477,7 +1477,7 @@ else:
             if st.button("🔍 Otestovat připojení", use_container_width=True):
                 test_key, test_provider = get_api_credentials()
                 if not test_key or not test_key.strip():
-                    st.error("Chybí klíč pro testování! Vložte jej do pole výše.")
+                    st.error("Chybí klíč pro testování! Vložte jej do pole vyše.")
                 else:
                     with st.spinner("Testuji připojení..."):
                         # Use the actual generate_analysis engine logic for the test to be 100% sure
@@ -1488,8 +1488,7 @@ else:
                                 
                                 # Use the same robust fallback list as the main engine
                                 test_models = [
-                                    'gemini-1.5-flash',
-                                    'models/gemini-1.5-flash',
+                                    'models/gemini-2.5-flash',
                                     'gemini-1.5-pro',
                                     'models/gemini-pro',
                                     'gemini-pro'

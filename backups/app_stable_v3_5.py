@@ -859,13 +859,10 @@ Požaduji, abys vygeneroval detailní odpověď jako validní JSON objekt bez Ma
             genai.configure(api_key=api_key)
             # Robust Fallback Matrix
             models_to_try = [
-                'models/gemini-2.0-flash-exp',
                 'models/gemini-2.5-flash',
-                'models/gemini-3.1-pro-preview',
-                'models/gemini-2.0-flash',
-                'models/gemini-1.5-pro-latest',
-                'models/gemini-1.5-flash-latest',
-                'models/gemini-pro'
+                'models/gemini-3.6-flash',
+                'models/gemini-2.5-pro',
+                'models/gemini-flash-latest'
             ]
             
             last_err = None

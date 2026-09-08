@@ -11,7 +11,10 @@ from google import genai
 from datetime import datetime, timedelta
 import pytz # Potřebné pro korektní časová pásma
 import os
+import re
 os.makedirs("scratch", exist_ok=True)
+
+DEPRECATED_GEMINI_MODELS = {"gemini-1.5-flash", "gemini-1.5-flash-latest", "gemini-2.0-flash", "models/gemini-1.5-flash", "gemini-pro", "models/gemini-pro"}
 
 # --- API Key Detection (Global Scope) ---
 def get_api_credentials():
@@ -66,7 +69,7 @@ if 'persistent_api_key' not in st.session_state or not st.session_state.persiste
     st.session_state.persistent_api_key = api_key if api_key else ""
 if 'persistent_api_provider' not in st.session_state:
     st.session_state.persistent_api_provider = ai_provider if ai_provider else "Gemini"
-if 'persistent_model_name' not in st.session_state:
+if 'persistent_model_name' not in st.session_state or st.session_state.persistent_model_name in DEPRECATED_GEMINI_MODELS:
     st.session_state.persistent_model_name = "gemini-2.5-flash"
 
 def sync_api_credentials():
@@ -75,7 +78,10 @@ def sync_api_credentials():
     if "input_api_provider" in st.session_state:
         st.session_state.persistent_api_provider = st.session_state.input_api_provider
     if "input_model_name" in st.session_state:
-        st.session_state.persistent_model_name = st.session_state.input_model_name
+        val = st.session_state.input_model_name.strip()
+        if val in DEPRECATED_GEMINI_MODELS:
+            val = "gemini-2.5-flash"
+        st.session_state.persistent_model_name = val
 
 # No base64 needed, pure CSS logo used.
 
@@ -1431,6 +1437,62 @@ def find_available_gemini_models(api_key):
         return []
 
 
+def parse_llm_json(text):
+    """Safely extracts and parses JSON from LLM text output."""
+    if not text:
+        raise ValueError("Empty response text from LLM")
+    
+    # Strip markdown block formatting if present
+    if "```json" in text:
+        text = text.split("```json")[1].split("```")[0].strip()
+    elif "```" in text:
+        text = text.split("```")[1].split("```")[0].strip()
+        
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end != -1:
+        text = text[start:end+1]
+        
+    # Attempt 1: Direct JSON parsing
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+
+    # Attempt 2: Sanitize unescaped newlines/tabs inside double-quoted string literals
+    def fix_newlines_in_strings(s):
+        out = []
+        in_string = False
+        escaped = False
+        for char in s:
+            if char == '"' and not escaped:
+                in_string = not in_string
+                out.append(char)
+            elif in_string:
+                if char == "\n":
+                    out.append("\\n")
+                elif char == "\r":
+                    out.append("\\r")
+                elif char == "\t":
+                    out.append("\\t")
+                else:
+                    out.append(char)
+            else:
+                out.append(char)
+            if char == "\\" and not escaped:
+                escaped = True
+            else:
+                escaped = False
+        return "".join(out)
+
+    cleaned = fix_newlines_in_strings(text)
+    cleaned = re.sub(r",\s*([\}\]])", r"\1", cleaned)
+    
+    try:
+        return json.loads(cleaned)
+    except Exception:
+        return json.loads(cleaned, strict=False)
+
 import concurrent.futures
 
 def _do_generate(m, c_prompt, client):
@@ -1641,12 +1703,25 @@ def generate_analysis(ticker_symbol, df, fundamentals, news=None):
         elif provider == "Gemini":
             import subprocess
             
-            models_to_try = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash']
+            # Active supported models (gemini-1.5-flash and gemini-2.0-flash are deprecated/removed)
+            models_to_try = ['gemini-2.5-flash', 'gemini-3.6-flash', 'gemini-2.5-pro', 'gemini-flash-latest']
+            user_model = st.session_state.get('persistent_model_name', '').strip()
+            if user_model in DEPRECATED_GEMINI_MODELS:
+                user_model = 'gemini-2.5-flash'
+                st.session_state.persistent_model_name = 'gemini-2.5-flash'
+
+            if user_model and user_model not in models_to_try:
+                models_to_try.insert(0, user_model)
+            elif user_model and user_model in models_to_try:
+                models_to_try.remove(user_model)
+                models_to_try.insert(0, user_model)
+
+            models_to_try = [m for m in models_to_try if m not in DEPRECATED_GEMINI_MODELS]
+
             last_err = None
             
-            # Phase 1: Try JSON mode for each model
+            # Phase 1: Try JSON response mode for each model
             for model_name in models_to_try:
-                st.session_state.persistent_model_name = model_name
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
                 
                 try:
@@ -1673,21 +1748,17 @@ def generate_analysis(ticker_symbol, df, fundamentals, news=None):
                     resp_json = json.loads(res.stdout)
                     if "error" in resp_json:
                         err_msg = resp_json["error"].get("message", str(resp_json["error"]))
-                        raise Exception(f"API Error for {model_name}: {err_msg}")
+                        raise Exception(f"API Error ({model_name}): {err_msg}")
                         
                     raw_text = resp_json["candidates"][0]["content"]["parts"][0]["text"]
-                    
-                    text = raw_text
-                    if "```json" in text: text = text.split("```json")[1].split("```")[0].strip()
-                    elif "```" in text: text = text.split("```")[1].split("```")[0].strip()
-                    
-                    res_json = json.loads(text)
+                    res_json = parse_llm_json(raw_text)
+                    st.session_state.persistent_model_name = model_name
                     return res_json
                 except Exception as e:
                     last_err = str(e)
                     continue
             
-            # Phase 2: If JSON mode failed for all, try plain-text fallback mode for each model
+            # Phase 2: If JSON mode failed for all, try plain-text fallback mode
             for model_name in models_to_try:
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
                 try:
@@ -1712,29 +1783,20 @@ def generate_analysis(ticker_symbol, df, fundamentals, news=None):
                     resp_json = json.loads(res.stdout)
                     if "error" in resp_json:
                         err_msg = resp_json["error"].get("message", str(resp_json["error"]))
-                        raise Exception(f"API Error for {model_name}: {err_msg}")
+                        raise Exception(f"API Error ({model_name}): {err_msg}")
                         
                     raw_text = resp_json["candidates"][0]["content"]["parts"][0]["text"]
-                    
-                    text = raw_text
-                    if "```json" in text: text = text.split("```json")[1].split("```")[0].strip()
-                    elif "```" in text: text = text.split("```")[1].split("```")[0].strip()
-                    
-                    start = text.find("{")
-                    end = text.rfind("}")
-                    if start != -1 and end != -1:
-                        text = text[start:end+1]
-                        
-                    res_json = json.loads(text)
+                    res_json = parse_llm_json(raw_text)
+                    st.session_state.persistent_model_name = model_name
                     return res_json
                 except Exception as fallback_e:
                     last_err = str(fallback_e)
                     continue
             
             # If everything failed:
-            if "429" in last_err or "quota" in last_err.lower() or "exhausted" in last_err.lower():
+            if last_err and ("429" in last_err or "quota" in last_err.lower() or "exhausted" in last_err.lower()):
                 st.error("⚠️ AI Limit: Google vás dočasně omezil (Too Many Requests). Počkejte minutu nebo použijte jiný klíč.")
-            elif "demand" in last_err.lower() or "overloaded" in last_err.lower() or "503" in last_err:
+            elif last_err and ("demand" in last_err.lower() or "overloaded" in last_err.lower() or "503" in last_err):
                 st.error("⚠️ AI Server: Model má právě příliš vysokou zátěž (High Demand). Zkuste to za chvíli nebo použijte OpenAI.")
             
             with open("scratch/error.log", "w") as f:
@@ -1767,7 +1829,7 @@ def chat_with_ai(prompt, analysis_data):
         else:
             from google import genai
             client = genai.Client(api_key=api_key)
-            model_name = "gemini-2.5-flash"
+            model_name = st.session_state.get('persistent_model_name', 'gemini-2.5-flash')
             resp = client.models.generate_content(
                 model=model_name,
                 contents=f"Kontext: {context}\n\nUživatel se ptá: {prompt}"
@@ -2379,8 +2441,8 @@ else:
                                 from google import genai
                                 client = genai.Client(api_key=test_key.strip())
                                 
-                                # Use hardcoded working model instead of dynamic discovery which hangs
-                                test_models = ['gemini-2.5-flash', 'gemini-flash-latest', 'gemini-2.0-flash']
+                                # Use active supported models
+                                test_models = ['gemini-2.5-flash', 'gemini-3.6-flash', 'gemini-flash-latest']
                                 
                                 worked_model = None
                                 last_test_err = None
