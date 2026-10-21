@@ -329,6 +329,69 @@ html, body, [class*="css"] {
 .glow-long { color: #10B981; text-shadow: 0 0 10px rgba(16, 185, 129, 0.4); }
 .glow-short { color: #EF4444; text-shadow: 0 0 10px rgba(239, 68, 68, 0.4); }
 
+/* Trading Badges and Custom UI Components */
+.badge-limit {
+    background: rgba(56, 189, 248, 0.15);
+    border: 1px solid #38BDF8;
+    color: #38BDF8;
+    padding: 3px 10px;
+    border-radius: 6px;
+    font-weight: 700;
+    font-size: 0.78rem;
+    letter-spacing: 0.5px;
+}
+.badge-confirm {
+    background: rgba(245, 158, 11, 0.15);
+    border: 1px solid #F59E0B;
+    color: #F59E0B;
+    padding: 3px 10px;
+    border-radius: 6px;
+    font-weight: 700;
+    font-size: 0.78rem;
+    letter-spacing: 0.5px;
+}
+.badge-win {
+    background: rgba(16, 185, 129, 0.15);
+    border: 1px solid #10B981;
+    color: #10B981;
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-weight: 700;
+    font-size: 0.8rem;
+}
+.badge-loss {
+    background: rgba(239, 68, 68, 0.15);
+    border: 1px solid #EF4444;
+    color: #EF4444;
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-weight: 700;
+    font-size: 0.8rem;
+}
+.badge-pending {
+    background: rgba(148, 163, 184, 0.15);
+    border: 1px solid #64748B;
+    color: #94A3B8;
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-weight: 600;
+    font-size: 0.8rem;
+}
+.news-guard-box {
+    background: rgba(239, 68, 68, 0.12);
+    border-left: 5px solid #EF4444;
+    border-radius: 8px;
+    padding: 14px 18px;
+    margin-bottom: 20px;
+}
+.lot-calc-tile {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid #1E2129;
+    border-radius: 8px;
+    padding: 12px;
+    text-align: center;
+}
+
 /* --- Custom Loading Status Widget (Replaces Running Man) --- */
 [data-testid="stStatusWidget"] img, [data-testid="stStatusWidget"] label {
     display: none !important;
@@ -355,6 +418,10 @@ html, body, [class*="css"] {
 """, unsafe_allow_html=True)
 
 # --- Session State Initialization ---
+if 'account_balance' not in st.session_state:
+    st.session_state.account_balance = 10000.0
+if 'risk_pct' not in st.session_state:
+    st.session_state.risk_pct = 1.0
 if 'tf_interval' not in st.session_state:
     st.session_state.tf_interval = "1d"
 if 'tf_period' not in st.session_state:
@@ -508,6 +575,344 @@ def fetch_news(ticker_symbol):
         return parsed_news
     except Exception:
         return []
+
+# --- High-Impact Economic Calendar & News Guard ---
+
+@st.cache_data(show_spinner=False, ttl=3600)
+def fetch_economic_calendar():
+    """Fetches economic calendar from ForexFactory feed with disk caching and rate-limit guard."""
+    cache_file = "scratch/economic_calendar.json"
+    now_ts = time.time()
+    
+    # 1. Check local disk cache (valid for 3 hours)
+    if os.path.exists(cache_file):
+        try:
+            mtime = os.path.getmtime(cache_file)
+            if now_ts - mtime < 10800:
+                with open(cache_file, "r") as f:
+                    return json.load(f)
+        except Exception:
+            pass
+            
+    # 2. Try fetching from network with safe SSL context and timeout
+    try:
+        import ssl, urllib.request
+        ctx = ssl._create_unverified_context()
+        url = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+        with urllib.request.urlopen(req, timeout=4, context=ctx) as response:
+            events = json.loads(response.read().decode())
+            os.makedirs("scratch", exist_ok=True)
+            with open(cache_file, "w") as f:
+                json.dump(events, f)
+            return events
+    except Exception:
+        # Fallback to existing cache if available
+        if os.path.exists(cache_file):
+            try:
+                with open(cache_file, "r") as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        return []
+
+def get_ticker_currencies(ticker):
+    """Maps ticker symbol to relevant fiat currencies for macroeconomic impact."""
+    t = str(ticker).upper()
+    currencies = []
+    for c in ["EUR", "USD", "GBP", "JPY", "CAD", "AUD", "NZD", "CHF"]:
+        if c in t:
+            currencies.append(c)
+    if not currencies:
+        currencies = ["USD"]
+    return list(set(currencies))
+
+def check_news_guard(ticker_symbol):
+    """
+    Evaluates whether high-impact news for this asset are occurring today or in the hazard window.
+    Hazard window: 45 min before to 15 min after a HIGH impact event.
+    """
+    events = fetch_economic_calendar()
+    currencies = get_ticker_currencies(ticker_symbol)
+    now_utc = datetime.now(pytz.utc)
+    
+    active_hazard = False
+    hazard_event = None
+    upcoming_today = []
+    
+    for e in events:
+        impact = e.get("impact")
+        country = e.get("country")
+        
+        if country in currencies and impact in ["High", "Medium"]:
+            try:
+                dt = datetime.fromisoformat(e.get("date"))
+                delta_min = (dt - now_utc).total_seconds() / 60.0
+                
+                # Check if event is today or within 24 hours
+                if dt.date() == now_utc.date() or abs(delta_min) < 1440:
+                    event_info = {
+                        "title": e.get("title"),
+                        "country": country,
+                        "impact": impact,
+                        "time_str": dt.strftime("%H:%M UTC"),
+                        "delta_min": int(delta_min)
+                    }
+                    upcoming_today.append(event_info)
+                    
+                    # Hazard window: 45 min before to 15 min after
+                    if impact == "High" and -15 <= delta_min <= 45:
+                        active_hazard = True
+                        hazard_event = event_info
+            except Exception:
+                pass
+                
+    return {
+        "active_hazard": active_hazard,
+        "hazard_event": hazard_event,
+        "upcoming_today": upcoming_today[:5]
+    }
+
+
+# --- Position Sizing & Lot Calculator ---
+
+def extract_prices(entry_str, tp_str, sl_str):
+    """Extracts numeric price levels from LLM formatted strings."""
+    def clean_str(s):
+        s = re.sub(r"\bTP[123]?\b", "", str(s), flags=re.IGNORECASE)
+        s = re.sub(r"\bSL\b", "", s, flags=re.IGNORECASE)
+        return s.replace(",", ".")
+
+    def find_all_nums(s):
+        cleaned = clean_str(s)
+        return [float(x) for x in re.findall(r"\d+\.\d+|\b\d+\b", cleaned)]
+
+    entry_nums = find_all_nums(entry_str)
+    entry = entry_nums[0] if entry_nums else None
+
+    sl_nums = find_all_nums(sl_str)
+    sl = sl_nums[0] if sl_nums else None
+
+    tp_nums = find_all_nums(tp_str)
+    tp1 = tp_nums[0] if len(tp_nums) > 0 else None
+    tp2 = tp_nums[1] if len(tp_nums) > 1 else tp1
+    return entry, sl, tp1, tp2
+
+def calculate_position_sizing(ticker, entry, sl, tp1, tp2, account_balance, risk_pct):
+    """Calculates exact lot size, monetary risk, and projected profits."""
+    if not entry or not sl or entry == sl or account_balance <= 0 or risk_pct <= 0:
+        return None
+        
+    risk_money = account_balance * (risk_pct / 100.0)
+    distance = abs(entry - sl)
+    ticker_upper = str(ticker).upper()
+    
+    if "BTC" in ticker_upper or "ETH" in ticker_upper or "SOL" in ticker_upper:
+        unit = "Coins"
+        pos_size = risk_money / distance
+        profit_tp1 = pos_size * abs(tp1 - entry) if tp1 else 0
+        profit_tp2 = pos_size * abs(tp2 - entry) if tp2 else 0
+        dist_display = f"{distance:.2f} $"
+    elif "=X" in ticker_upper or any(c in ticker_upper for c in ["EUR", "USD", "GBP", "JPY", "CHF", "AUD", "CAD"]):
+        unit = "Lots"
+        is_jpy = "JPY" in ticker_upper
+        pip_size = 0.01 if is_jpy else 0.0001
+        pips = distance / pip_size
+        pip_val_per_lot = 10.0
+        pos_size = risk_money / (pips * pip_val_per_lot) if pips > 0 else 0
+        profit_tp1 = pos_size * (abs(tp1 - entry) / pip_size) * pip_val_per_lot if tp1 else 0
+        profit_tp2 = pos_size * (abs(tp2 - entry) / pip_size) * pip_val_per_lot if tp2 else 0
+        dist_display = f"{pips:.1f} pips"
+    elif "GC=F" in ticker_upper or "GOLD" in ticker_upper:
+        unit = "Contracts"
+        point_value = 100.0
+        pos_size = risk_money / (distance * point_value) if distance > 0 else 0
+        profit_tp1 = pos_size * abs(tp1 - entry) * point_value if tp1 else 0
+        profit_tp2 = pos_size * abs(tp2 - entry) * point_value if tp2 else 0
+        dist_display = f"{distance:.2f} pts"
+    else:
+        unit = "Shares"
+        pos_size = risk_money / distance
+        profit_tp1 = pos_size * abs(tp1 - entry) if tp1 else 0
+        profit_tp2 = pos_size * abs(tp2 - entry) if tp2 else 0
+        dist_display = f"{distance:.2f} $"
+
+    rrr_tp1 = abs(tp1 - entry) / distance if tp1 and distance > 0 else 0
+    rrr_tp2 = abs(tp2 - entry) / distance if tp2 and distance > 0 else 0
+    
+    return {
+        "risk_money": round(risk_money, 2),
+        "distance_display": dist_display,
+        "pos_size": round(pos_size, 2 if unit != "Coins" else 4),
+        "unit": unit,
+        "profit_tp1": round(profit_tp1, 2),
+        "profit_tp2": round(profit_tp2, 2),
+        "rrr_tp1": round(rrr_tp1, 1),
+        "rrr_tp2": round(rrr_tp2, 1)
+    }
+
+
+# --- Win-Rate & Trade Outcome Tracker ---
+
+def save_trade_to_history(ticker, tf, setup, rationale):
+    """Persists valid LONG and SHORT trade setups to disk for outcome evaluation."""
+    if not isinstance(setup, dict):
+        return
+    direction = str(setup.get("direction", "WAIT")).upper()
+    if direction not in ["LONG", "SHORT"]:
+        return
+        
+    entry_val, sl_val, tp1_val, tp2_val = extract_prices(
+        setup.get("entry", ""),
+        setup.get("tp", ""),
+        setup.get("sl", "")
+    )
+    
+    if not entry_val or not sl_val:
+        return
+        
+    history_file = "scratch/trade_history.json"
+    os.makedirs("scratch", exist_ok=True)
+    trades = []
+    if os.path.exists(history_file):
+        try:
+            with open(history_file, "r") as f:
+                trades = json.load(f)
+        except Exception:
+            trades = []
+            
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+    trade_id = f"{ticker}_{tf}_{int(time.time())}"
+    
+    # Avoid duplicate addition within short time
+    for t in trades[-3:]:
+        if t.get("ticker") == ticker and t.get("tf") == tf and t.get("direction") == direction:
+            if abs(t.get("entry", 0) - entry_val) / max(entry_val, 1) < 0.0005:
+                return
+                
+    trade_entry = {
+        "id": trade_id,
+        "ticker": ticker,
+        "tf": tf,
+        "time": now_str,
+        "direction": direction,
+        "entry_type": setup.get("entry_type", "CONFIRMATION"),
+        "confirmation_trigger": setup.get("confirmation_trigger", "N/A"),
+        "entry": entry_val,
+        "sl": sl_val,
+        "tp1": tp1_val,
+        "tp2": tp2_val,
+        "status": "PENDING",
+        "pnl_r": 0.0,
+        "rationale": str(rationale)[:140] if rationale else ""
+    }
+    trades.append(trade_entry)
+    try:
+        with open(history_file, "w") as f:
+            json.dump(trades, f, indent=2)
+    except Exception:
+        pass
+
+def evaluate_trade_history(check_live=False):
+    """
+    Evaluates recorded trade setups against recent market price action.
+    Determines if trade hit TP1, TP2, or SL. Computes Win-Rate and Net R.
+    """
+    history_file = "scratch/trade_history.json"
+    if not os.path.exists(history_file):
+        return {"trades": [], "wins": 0, "losses": 0, "pending": 0, "win_rate": 0, "net_r": 0}
+        
+    try:
+        with open(history_file, "r") as f:
+            trades = json.load(f)
+    except Exception:
+        return {"trades": [], "wins": 0, "losses": 0, "pending": 0, "win_rate": 0, "net_r": 0}
+
+    updated = False
+    
+    if check_live:
+        import yfinance as yf
+        for t in trades:
+            if t.get("status") == "PENDING":
+                ticker = t.get("ticker")
+                direction = t.get("direction")
+                entry = t.get("entry")
+                sl = t.get("sl")
+                tp1 = t.get("tp1")
+                tp2 = t.get("tp2")
+                
+                try:
+                    df_check = yf.download(ticker, period="5d", interval="15m", progress=False)
+                    if df_check.empty:
+                        continue
+                    if isinstance(df_check.columns, pd.MultiIndex):
+                        df_check.columns = df_check.columns.get_level_values(0)
+                        
+                    for _, row in df_check.tail(150).iterrows():
+                        h = float(row['High'])
+                        l = float(row['Low'])
+                        
+                        if direction == "LONG":
+                            if sl and l <= sl:
+                                t["status"] = "LOSS (SL Hit)"
+                                t["pnl_r"] = -1.0
+                                updated = True
+                                break
+                            elif tp2 and h >= tp2:
+                                t["status"] = "FULL WIN (TP2)"
+                                rrr = abs(tp2 - entry) / abs(entry - sl) if abs(entry - sl) > 0 else 2.5
+                                t["pnl_r"] = round(rrr, 1)
+                                updated = True
+                                break
+                            elif tp1 and h >= tp1:
+                                t["status"] = "WIN (TP1)"
+                                rrr = abs(tp1 - entry) / abs(entry - sl) if abs(entry - sl) > 0 else 1.5
+                                t["pnl_r"] = round(rrr, 1)
+                                updated = True
+                                break
+                        elif direction == "SHORT":
+                            if sl and h >= sl:
+                                t["status"] = "LOSS (SL Hit)"
+                                t["pnl_r"] = -1.0
+                                updated = True
+                                break
+                            elif tp2 and l <= tp2:
+                                t["status"] = "FULL WIN (TP2)"
+                                rrr = abs(entry - tp2) / abs(sl - entry) if abs(sl - entry) > 0 else 2.5
+                                t["pnl_r"] = round(rrr, 1)
+                                updated = True
+                                break
+                            elif tp1 and l <= tp1:
+                                t["status"] = "WIN (TP1)"
+                                rrr = abs(entry - tp1) / abs(sl - entry) if abs(sl - entry) > 0 else 1.5
+                                t["pnl_r"] = round(rrr, 1)
+                                updated = True
+                                break
+                except Exception:
+                    pass
+                    
+        if updated:
+            try:
+                with open(history_file, "w") as f:
+                    json.dump(trades, f, indent=2)
+            except Exception:
+                pass
+
+    wins = sum(1 for t in trades if "WIN" in t.get("status", ""))
+    losses = sum(1 for t in trades if "LOSS" in t.get("status", ""))
+    pending = sum(1 for t in trades if "PENDING" in t.get("status", ""))
+    closed = wins + losses
+    win_rate = round((wins / closed * 100), 1) if closed > 0 else 0.0
+    net_r = round(sum(t.get("pnl_r", 0) for t in trades), 1)
+    
+    return {
+        "trades": trades,
+        "wins": wins,
+        "losses": losses,
+        "pending": pending,
+        "win_rate": win_rate,
+        "net_r": net_r
+    }
 
 def get_technical_signals(df):
     """Generates a summary of technical signals for the Health Check panel."""
@@ -1627,6 +2032,18 @@ def generate_analysis(ticker_symbol, df, fundamentals, news=None):
     else:
         gz_str = "Nedostatek swing bodů pro výpočet."
 
+    # 7. High-Impact News Guard Context
+    news_guard = check_news_guard(ticker_symbol)
+    guard_str = ""
+    if news_guard.get("active_hazard") and news_guard.get("hazard_event"):
+        he = news_guard["hazard_event"]
+        guard_str = f"🚨 KRITICKÉ VAROVÁNÍ: V okně události {he.get('title')} ({he.get('country')}) v {he.get('time_str')} (zbývá {he.get('delta_min')} min)! Extrémní riziko slippage a spreadu."
+    elif news_guard.get("upcoming_today"):
+        events_list = [f"- {e.get('title')} ({e.get('country')}) v {e.get('time_str')}" for e in news_guard["upcoming_today"]]
+        guard_str = "Dnešní makro události:\n" + "\n".join(events_list)
+    else:
+        guard_str = "Žádné vysoce rizikové zprávy pro tento pár v nejbližší době."
+
     sys_prompt = f"""
     Jsi špičkový kvantitativní analytik pro institucionální hedge-fond. Tvým úkolem je provést nekompromisní RIGORÓZNÍ AUDIT instrumentu {ticker_symbol} s využitím metodologie Smart Money Concepts (SMC) a Multi-Timeframe (MTF) analýzy.
     
@@ -1648,7 +2065,14 @@ def generate_analysis(ticker_symbol, df, fundamentals, news=None):
     6. **Pravidlo minimálního RRR >= 1:2.5**:
        - Každý doporučený setup (LONG nebo SHORT) **musí** splňovat poměr Risk-to-Reward (RRR) minimálně **1:2.5** (ideálně 1:3 a více).
        - Pokud po započtení strukturálního Stop Lossu a cílového Take Profitu u nejbližší likvidity nevychází RRR aspoň 1:2.5, **NESMÍŠ** doporučit obchod a musíš vrátit směr `direction: "WAIT"`.
-    7. **Ekonomická Logika**: Špatná makro data pro danou zemi (nezaměstnanost, HDP) znamenají TLAK NA OSLABENÍ měny. Nehalucinuj o "prostoru pro nákup" bez jasného fundamentálního důvodu (např. spekulace na pivot banky).
+    7. **Dvojfázový vstup (LIMIT vs. CONFIRMATION)**:
+       - Rozlišuj přesný typ vstupu `entry_type`:
+         * `LIMIT`: Přímý limitní vstup do unmitigovaného Order Blocku nebo FVG v Golden Zone (pokud cena klidně dotéká k zóně ve směru trendu).
+         * `CONFIRMATION`: Vstup až po reakci na nižším timeframe (pokud trh právě vymetl likviditu nebo je zvýšená volatilita). V takovém případě uveď v `confirmation_trigger` přesnou podmínku (např. 'Počkej na 5M/15M CHoCH s uzavřením svíčky nad/pod X').
+         * `WAIT`: Pokud podmínky nejsou splněny.
+    8. **Pravidlo News Guard (Ochrana kapitálu před zprávami)**:
+       - Pokud je v datech aktivní kritické varování News Guard (do 45 min před červenou zprávou), NESMÍŠ doporučit přímý LIMIT vstup. Vrať `direction: "WAIT"` s odůvodněním "HIGH-IMPACT NEWS HAZARD", nebo nařiď `entry_type: "CONFIRMATION"` až po uklidnění po zprávách.
+    9. **Ekonomická Logika**: Špatná makro data pro danou zemi (nezaměstnanost, HDP) znamenají TLAK NA OSLABENÍ měny. Nehalucinuj o "prostoru pro nákup" bez jasného fundamentálního důvodu (např. spekulace na pivot banky).
     
     ### VSTUPNÍ DATA:
     - TECHNICKÝ STAV: {tech_str}
@@ -1660,11 +2084,14 @@ def generate_analysis(ticker_symbol, df, fundamentals, news=None):
     - SENTIMENT TRHU: {sentiment_context}
     - FUNDAMENTY: {fund_str}
     - ZPRÁVY: {news_str}
+    - HIGH-IMPACT MAKRO KALENDÁŘ: {guard_str}
     
     ### POŽADAVKY NA VÝSTUP (PŘÍSNĚ VALIDNÍ JSON V ČEŠTINĚ):
     {{
       "trade_setup": {{
         "direction": "LONG / SHORT / WAIT",
+        "entry_type": "LIMIT / CONFIRMATION / WAIT",
+        "confirmation_trigger": "Přesná instrukce pro vstup na nižším TF (např. 'Počkej na 5M CHoCH s FVG na hladině 1.0855') nebo 'N/A'",
         "entry": "Konkrétní cenová hladina nebo zóna (Pokud WAIT, napiš 'N/A')",
         "tp": "První a druhý cílový profit (Pokud WAIT, napiš 'N/A')",
         "sl": "Hladina invalidace setupu (Pokud WAIT, napiš 'N/A')",
@@ -1698,7 +2125,10 @@ def generate_analysis(ticker_symbol, df, fundamentals, news=None):
                 messages=[{"role": "system", "content": "Jsi analytik. Vracíš JSON."}, {"role": "user", "content": sys_prompt}],
                 temperature=0.7
             )
-            return json.loads(response.choices[0].message.content)
+            res_json = json.loads(response.choices[0].message.content)
+            if isinstance(res_json, dict) and "trade_setup" in res_json:
+                save_trade_to_history(ticker_symbol, st.session_state.get('tf_interval', '1d'), res_json.get("trade_setup"), res_json.get("trade_setup", {}).get("rationale", ""))
+            return res_json
 
         elif provider == "Gemini":
             import subprocess
@@ -1753,6 +2183,8 @@ def generate_analysis(ticker_symbol, df, fundamentals, news=None):
                     raw_text = resp_json["candidates"][0]["content"]["parts"][0]["text"]
                     res_json = parse_llm_json(raw_text)
                     st.session_state.persistent_model_name = model_name
+                    if isinstance(res_json, dict) and "trade_setup" in res_json:
+                        save_trade_to_history(ticker_symbol, st.session_state.get('tf_interval', '1d'), res_json.get("trade_setup"), res_json.get("trade_setup", {}).get("rationale", ""))
                     return res_json
                 except Exception as e:
                     last_err = str(e)
@@ -1788,6 +2220,8 @@ def generate_analysis(ticker_symbol, df, fundamentals, news=None):
                     raw_text = resp_json["candidates"][0]["content"]["parts"][0]["text"]
                     res_json = parse_llm_json(raw_text)
                     st.session_state.persistent_model_name = model_name
+                    if isinstance(res_json, dict) and "trade_setup" in res_json:
+                        save_trade_to_history(ticker_symbol, st.session_state.get('tf_interval', '1d'), res_json.get("trade_setup"), res_json.get("trade_setup", {}).get("rationale", ""))
                     return res_json
                 except Exception as fallback_e:
                     last_err = str(fallback_e)
@@ -2155,6 +2589,28 @@ if st.session_state.current_page == "Dashboard":
                         with st.container(border=True):
                             st.markdown(f'<div style="font-size: 0.8rem; color: #94A3B8; margin-bottom: 5px;">{article["publisher"]}</div><div style="font-size: 0.9rem; font-weight: 600; min-height: 45px; margin-bottom: 10px;"><a href="{article["link"]}" target="_blank" style="text-decoration: none; color: #F8FAFC;">{article["title"][:60]}{"..." if len(article["title"]) > 60 else ""}</a></div>', unsafe_allow_html=True)
 
+            # --- High-Impact News Guard Indicator & Macro Calendar ---
+            news_guard = check_news_guard(ticker)
+            if news_guard.get("active_hazard") and news_guard.get("hazard_event"):
+                he = news_guard["hazard_event"]
+                st.markdown(f'''
+                <div class="news-guard-box">
+                    <div style="display:flex; align-items:center; gap: 12px;">
+                        <span style="font-size: 1.5rem;">🚨</span>
+                        <div>
+                            <b style="color: #EF4444; font-size: 1rem;">NEWS GUARD AKTIVNÍ: Kritické riziko zpráv!</b><br>
+                            <span style="color: #F8FAFC; font-size: 0.9rem;"><b>{he.get('title')}</b> ({he.get('country')}) je plánováno v <b>{he.get('time_str')}</b> (zbývá {he.get('delta_min')} min).</span>
+                            <div style="color: #FDA4AF; font-size: 0.8rem; margin-top: 4px;">⚠️ Doporučeno neotevírat limitní příkazy těsně před a po vyhlášení kvůli riziku masivního slippage a spreadu.</div>
+                        </div>
+                    </div>
+                </div>
+                ''', unsafe_allow_html=True)
+            elif news_guard.get("upcoming_today"):
+                with st.expander(f"📅 Dnešní makro kalendář pro {ticker} ({len(news_guard['upcoming_today'])} událostí)", expanded=False):
+                    for ev in news_guard["upcoming_today"]:
+                        impact_color = "#EF4444" if ev.get("impact") == "High" else "#F59E0B"
+                        st.markdown(f'<div style="display:flex; justify-content:space-between; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,0.05); font-size:0.85rem;"><span style="color:#F8FAFC;">{ev.get("title")} ({ev.get("country")})</span><span style="color:{impact_color}; font-weight:600;">{ev.get("impact")} • {ev.get("time_str")}</span></div>', unsafe_allow_html=True)
+
             # --- AI Generated Trade Ideas Header ---
             ai_info = st.session_state.get('ai_analysis_data')
             conf_html = ""
@@ -2318,9 +2774,80 @@ if st.session_state.current_page == "Dashboard":
                         if direction == "WAIT":
                             st.markdown(f'<div style="display:flex; justify-content:space-between; padding: 10px 0; border-bottom: 1px solid #1E2129;"><span style="color:#94A3B8; font-size:0.9rem;">Direction Bias</span><span style="color:#F59E0B; font-weight:600;"><span class="pulse-dot" style="background-color:#F59E0B; box-shadow:0 0 8px #F59E0B;"></span>WAIT (No Trade)</span></div><div style="padding: 20px 10px; text-align: center; color: #94A3B8; line-height: 1.5;"><b>Proč čekat:</b> {setup.get("rationale", "Nedostatek jasných signálů.")}<br><br><span style="color: #38BDF8; font-weight: 600;">Kdy se zeptat znovu:</span> {setup.get("when_to_ask_again", "Zkuste to později.")}</div>', unsafe_allow_html=True)
                         else:
-                            st.markdown(f'<div style="display:flex; justify-content:space-between; padding: 10px 0; border-bottom: 1px solid #1E2129;"><span style="color:#94A3B8; font-size:0.9rem;">Direction Bias</span><span class="{dir_class}" style="font-weight:600;"><span class="{dot_class}"></span>{direction}</span></div><div style="display:flex; justify-content:space-between; padding: 10px 0; border-bottom: 1px solid #1E2129;"><span style="color:#94A3B8; font-size:0.9rem;">Entry Point</span><span style="font-weight:600;">{setup.get("entry", "N/A")}</span></div><div style="display:flex; justify-content:space-between; padding: 10px 0; border-bottom: 1px solid #1E2129;"><span style="color:#94A3B8; font-size:0.9rem;">Take Profit</span><span style="color:#00E676; font-weight:600;">{setup.get("tp", "N/A")}</span></div><div style="display:flex; justify-content:space-between; padding: 10px 0;"><span style="color:#94A3B8; font-size:0.9rem;">Stop Loss</span><span style="color:#F87171; font-weight:600;">{setup.get("sl", "N/A")}</span></div>', unsafe_allow_html=True)
+                            entry_type = str(setup.get("entry_type", "LIMIT")).upper()
+                            type_badge = '<span class="badge-limit">⚡ LIMIT</span>' if "LIMIT" in entry_type else '<span class="badge-confirm">🛡️ CONFIRMATION</span>'
+                            
+                            st.markdown(f'''
+                            <div style="display:flex; justify-content:space-between; align-items:center; padding: 10px 0; border-bottom: 1px solid #1E2129;">
+                                <span style="color:#94A3B8; font-size:0.9rem;">Směr a Typ vstupu</span>
+                                <div style="display:flex; align-items:center; gap:8px;">
+                                    {type_badge}
+                                    <span class="{dir_class}" style="font-weight:700;"><span class="{dot_class}"></span>{direction}</span>
+                                </div>
+                            </div>
+                            <div style="display:flex; justify-content:space-between; padding: 10px 0; border-bottom: 1px solid #1E2129;">
+                                <span style="color:#94A3B8; font-size:0.9rem;">Entry Point</span>
+                                <span style="font-weight:600;">{setup.get("entry", "N/A")}</span>
+                            </div>
+                            <div style="display:flex; justify-content:space-between; padding: 10px 0; border-bottom: 1px solid #1E2129;">
+                                <span style="color:#94A3B8; font-size:0.9rem;">Take Profit</span>
+                                <span style="color:#00E676; font-weight:600;">{setup.get("tp", "N/A")}</span>
+                            </div>
+                            <div style="display:flex; justify-content:space-between; padding: 10px 0;">
+                                <span style="color:#94A3B8; font-size:0.9rem;">Stop Loss</span>
+                                <span style="color:#F87171; font-weight:600;">{setup.get("sl", "N/A")}</span>
+                            </div>
+                            ''', unsafe_allow_html=True)
+
+                            conf_trig = setup.get("confirmation_trigger", "N/A")
+                            if conf_trig and conf_trig != "N/A":
+                                st.markdown(f'''
+                                <div style="background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.3); border-radius: 6px; padding: 10px 12px; margin-top: 10px; font-size: 0.85rem;">
+                                    <span style="color: #F59E0B; font-weight: 700;">🎯 TRIGGER PODMÍNKA:</span>
+                                    <span style="color: #E2E8F0; margin-left: 5px;">{conf_trig}</span>
+                                </div>
+                                ''', unsafe_allow_html=True)
 
                 st.markdown("<br>", unsafe_allow_html=True)
+
+                # --- Kalkulátor Velikosti Pozice (Risk & Lot Size) ---
+                if direction in ["LONG", "SHORT"]:
+                    with st.container(border=True):
+                        st.markdown("<h3 style='margin-top:0; font-size: 1.1rem; display:flex; align-items:center; gap:8px;'>📦 Kalkulátor velikosti pozice (Risk & Lot Size)</h3>", unsafe_allow_html=True)
+                        c_acc1, c_acc2 = st.columns(2)
+                        with c_acc1:
+                            acc_bal = st.number_input("Zůstatek účtu ($):", min_value=100.0, value=float(st.session_state.get('account_balance', 10000.0)), step=500.0, key="in_account_balance")
+                            st.session_state.account_balance = acc_bal
+                        with c_acc2:
+                            r_pct = st.slider("Risk na obchod (%):", min_value=0.25, max_value=5.0, value=float(st.session_state.get('risk_pct', 1.0)), step=0.25, key="in_risk_pct")
+                            st.session_state.risk_pct = r_pct
+
+                        e_n, s_n, t1_n, t2_n = extract_prices(setup.get("entry", ""), setup.get("tp", ""), setup.get("sl", ""))
+                        pos_calc = calculate_position_sizing(ticker, e_n, s_n, t1_n, t2_n, acc_bal, r_pct)
+
+                        if pos_calc:
+                            st.markdown(f'''
+                            <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 10px;">
+                                <div class="lot-calc-tile">
+                                    <div style="font-size: 0.75rem; color: #94A3B8; text-transform: uppercase;">Doporučená pozice</div>
+                                    <div style="font-size: 1.35rem; font-weight: 800; color: #38BDF8; margin-top: 3px;">{pos_calc["pos_size"]} <span style="font-size:0.85rem; font-weight:600;">{pos_calc["unit"]}</span></div>
+                                </div>
+                                <div class="lot-calc-tile">
+                                    <div style="font-size: 0.75rem; color: #94A3B8; text-transform: uppercase;">Risk v $ ({r_pct}%)</div>
+                                    <div style="font-size: 1.35rem; font-weight: 800; color: #EF4444; margin-top: 3px;">${pos_calc["risk_money"]}</div>
+                                </div>
+                                <div class="lot-calc-tile">
+                                    <div style="font-size: 0.75rem; color: #94A3B8; text-transform: uppercase;">Vzdálenost SL</div>
+                                    <div style="font-size: 1.35rem; font-weight: 800; color: #F59E0B; margin-top: 3px;">{pos_calc["distance_display"]}</div>
+                                </div>
+                                <div class="lot-calc-tile">
+                                    <div style="font-size: 0.75rem; color: #94A3B8; text-transform: uppercase;">Zisk TP1 / TP2</div>
+                                    <div style="font-size: 1.15rem; font-weight: 800; color: #10B981; margin-top: 5px;">+${pos_calc["profit_tp1"]} / +${pos_calc["profit_tp2"]}</div>
+                                </div>
+                            </div>
+                            ''', unsafe_allow_html=True)
+                        else:
+                            st.caption("ℹ️ Pro výpočet lotů je zapotřebí konkrétní číselný vstup a SL.")
             
                 # --- Detailní Rozbor (Expandery) ---
                 with st.expander("📊 Detailní Technická Analýza"):
@@ -2392,6 +2919,59 @@ if st.session_state.current_page == "Dashboard":
                             st.write(response)
                             st.session_state.chat_history.append({"role": "assistant", "content": response})
 
+    # 3. Win-Rate & Trade Outcome Tracker
+    st.markdown("<br>", unsafe_allow_html=True)
+    with st.container(border=True):
+        col_tr_head, col_tr_btn = st.columns([0.7, 0.3])
+        with col_tr_head:
+            st.markdown("<h3 style='margin:0; font-size: 1.25rem; display:flex; align-items:center; gap:8px;'>🏆 Win-Rate & Outcome Tracker (Sledování reálných výsledků)</h3>", unsafe_allow_html=True)
+            st.caption("Automatické sledování zasažení TP1, TP2 nebo SL u doporučených obchodů.")
+        with col_tr_btn:
+            check_live_btn = st.button("🔄 Vyhodnotit obchody", use_container_width=True)
+
+        eval_data = evaluate_trade_history(check_live=check_live_btn)
+        if check_live_btn:
+            st.toast("✅ Obchody byly zkontrolovány vůči aktuálním tržním cenám!")
+        
+        # Metric Cards
+        m_c1, m_c2, m_c3, m_c4 = st.columns(4)
+        with m_c1:
+            st.metric("🎯 Win Rate", f"{eval_data['win_rate']}%" if (eval_data['wins'] + eval_data['losses']) > 0 else "N/A")
+        with m_c2:
+            st.metric("📈 Čistý Zisk", f"{eval_data['net_r']:+.1f} R")
+        with m_c3:
+            st.metric("⚖️ Poměr W / L", f"{eval_data['wins']} W / {eval_data['losses']} L")
+        with m_c4:
+            st.metric("⏳ Čekající", f"{eval_data['pending']}")
+
+        if eval_data['trades']:
+            with st.expander("📋 Seznam zaznamenaných obchodů", expanded=False):
+                for t in reversed(eval_data['trades'][-15:]):
+                    st_val = t.get('status', 'PENDING')
+                    if 'WIN' in st_val:
+                        b_class = 'badge-win'
+                    elif 'LOSS' in st_val:
+                        b_class = 'badge-loss'
+                    else:
+                        b_class = 'badge-pending'
+                        
+                    d_col = "#10B981" if t.get('direction') == "LONG" else "#EF4444"
+                    st.markdown(f'''
+                    <div style="display:flex; justify-content:space-between; align-items:center; padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,0.05); font-size:0.85rem;">
+                        <div>
+                            <span style="font-weight:700; color:{d_col};">{t.get('direction')}</span>
+                            <b style="color:#F8FAFC; margin-left:6px;">{t.get('ticker')}</b>
+                            <span style="color:#64748B; margin-left:6px;">({t.get('tf')}) • {t.get('time')}</span>
+                            <div style="color:#94A3B8; font-size:0.75rem; margin-top:2px;">Vstup: {t.get('entry')} | SL: {t.get('sl')} | TP1: {t.get('tp1')}</div>
+                        </div>
+                        <div style="text-align:right;">
+                            <span class="{b_class}">{st_val}</span>
+                            <div style="color:#38BDF8; font-weight:700; font-size:0.8rem; margin-top:4px;">{t.get('pnl_r', 0):+.1f} R</div>
+                        </div>
+                    </div>
+                    ''', unsafe_allow_html=True)
+        else:
+            st.info("Zatím nebyly zaznamenány žádné obchody. Jakmile AI doporučí LONG nebo SHORT, automaticky se zde objeví a začne vyhodnocovat.")
 
 else:
     # --- Settings Page Content ---
