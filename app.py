@@ -71,6 +71,10 @@ if 'persistent_api_provider' not in st.session_state:
     st.session_state.persistent_api_provider = ai_provider if ai_provider else "Gemini"
 if 'persistent_model_name' not in st.session_state or st.session_state.persistent_model_name in DEPRECATED_GEMINI_MODELS:
     st.session_state.persistent_model_name = "gemini-2.5-flash"
+if 'trade_history' not in st.session_state:
+    st.session_state.trade_history = []
+if 'daily_evaluation' not in st.session_state:
+    st.session_state.daily_evaluation = None
 
 def sync_api_credentials():
     if "input_api_key" in st.session_state:
@@ -375,6 +379,15 @@ html, body, [class*="css"] {
     padding: 3px 8px;
     border-radius: 4px;
     font-weight: 600;
+    font-size: 0.8rem;
+}
+.badge-safe {
+    background: rgba(56, 189, 248, 0.15);
+    border: 1px solid #38BDF8;
+    color: #38BDF8;
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-weight: 700;
     font-size: 0.8rem;
 }
 .news-guard-box {
@@ -754,47 +767,91 @@ def calculate_position_sizing(ticker, entry, sl, tp1, tp2, account_balance, risk
 
 # --- Win-Rate & Trade Outcome Tracker ---
 
+def load_trade_history():
+    """Loads recorded trades from session state or disk."""
+    if 'trade_history' in st.session_state and isinstance(st.session_state.trade_history, list) and len(st.session_state.trade_history) > 0:
+        return st.session_state.trade_history
+    for path in ["data/trade_history.json", "scratch/trade_history.json"]:
+        if os.path.exists(path):
+            try:
+                with open(path, "r") as f:
+                    data = json.load(f)
+                    if isinstance(data, list) and len(data) > 0:
+                        if 'trade_history' in st.session_state:
+                            st.session_state.trade_history = data
+                        return data
+            except Exception:
+                pass
+    return []
+
+def persist_trade_history(trades):
+    """Saves recorded trades to session state and disk."""
+    if 'trade_history' in st.session_state:
+        st.session_state.trade_history = trades
+    for path in ["data/trade_history.json", "scratch/trade_history.json"]:
+        try:
+            folder = os.path.dirname(path)
+            if folder: os.makedirs(folder, exist_ok=True)
+            with open(path, "w") as f:
+                json.dump(trades, f, indent=2)
+        except Exception:
+            pass
+
 def save_trade_to_history(ticker, tf, setup, rationale):
-    """Persists valid LONG and SHORT trade setups to disk for outcome evaluation."""
+    """Persists trade setups (LONG, SHORT, or SAFE WAIT) for outcome evaluation."""
     if not isinstance(setup, dict):
         return
     direction = str(setup.get("direction", "WAIT")).upper()
-    if direction not in ["LONG", "SHORT"]:
+    
+    trades = load_trade_history()
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    trade_id = f"{ticker}_{tf}_{int(time.time())}"
+    
+    if direction == "WAIT":
+        for t in trades[-5:]:
+            if t.get("ticker") == ticker and t.get("date") == today_str and t.get("direction") == "WAIT":
+                return
+        trade_entry = {
+            "id": trade_id,
+            "ticker": ticker,
+            "tf": tf,
+            "time": now_str,
+            "date": today_str,
+            "direction": "WAIT",
+            "entry_type": "WAIT",
+            "confirmation_trigger": "N/A",
+            "entry": None,
+            "sl": None,
+            "tp1": None,
+            "tp2": None,
+            "status": "SAFE (WAIT)",
+            "pnl_r": 0.0,
+            "rationale": str(rationale)[:140] if rationale else "Doporučeno vyčkat mimo trh (ochrana kapitálu)."
+        }
+        trades.append(trade_entry)
+        persist_trade_history(trades)
         return
-        
+
     entry_val, sl_val, tp1_val, tp2_val = extract_prices(
         setup.get("entry", ""),
         setup.get("tp", ""),
         setup.get("sl", "")
     )
-    
     if not entry_val or not sl_val:
         return
-        
-    history_file = "scratch/trade_history.json"
-    os.makedirs("scratch", exist_ok=True)
-    trades = []
-    if os.path.exists(history_file):
-        try:
-            with open(history_file, "r") as f:
-                trades = json.load(f)
-        except Exception:
-            trades = []
-            
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-    trade_id = f"{ticker}_{tf}_{int(time.time())}"
-    
-    # Avoid duplicate addition within short time
+
     for t in trades[-3:]:
         if t.get("ticker") == ticker and t.get("tf") == tf and t.get("direction") == direction:
-            if abs(t.get("entry", 0) - entry_val) / max(entry_val, 1) < 0.0005:
+            if abs((t.get("entry") or 0) - entry_val) / max(entry_val, 1) < 0.0005:
                 return
-                
+
     trade_entry = {
         "id": trade_id,
         "ticker": ticker,
         "tf": tf,
         "time": now_str,
+        "date": today_str,
         "direction": direction,
         "entry_type": setup.get("entry_type", "CONFIRMATION"),
         "confirmation_trigger": setup.get("confirmation_trigger", "N/A"),
@@ -807,108 +864,231 @@ def save_trade_to_history(ticker, tf, setup, rationale):
         "rationale": str(rationale)[:140] if rationale else ""
     }
     trades.append(trade_entry)
+    persist_trade_history(trades)
+
+def evaluate_day_outcome(ticker, setup=None, eval_date=None):
+    """
+    Evaluates market price action strictly from midnight to midnight (00:00:00 to 23:59:59 UTC).
+    Checks whether Entry was reached, and subsequent TP1, TP2, or SL hits.
+    Handles LONG, SHORT, and WAIT directions.
+    """
+    now_utc = datetime.now(pytz.utc)
+    if eval_date is None:
+        eval_date = now_utc.date()
+    elif isinstance(eval_date, str):
+        try:
+            eval_date = datetime.fromisoformat(eval_date.split(" ")[0]).date()
+        except Exception:
+            eval_date = now_utc.date()
+
+    date_str = eval_date.strftime("%Y-%m-%d")
+
+    import yfinance as yf
     try:
-        with open(history_file, "w") as f:
-            json.dump(trades, f, indent=2)
+        df = yf.download(ticker, period="5d", interval="5m", progress=False)
+        if df.empty:
+            df = yf.download(ticker, period="5d", interval="15m", progress=False)
     except Exception:
-        pass
+        df = pd.DataFrame()
+
+    if df.empty:
+        return {
+            "ticker": ticker,
+            "status": "DATA_UNAVAILABLE",
+            "direction": "N/A",
+            "pnl_r": 0.0,
+            "date_str": date_str,
+            "summary": f"Pro symbol {ticker} se nepodařilo stáhnout intradenní svíčky pro den {date_str}.",
+            "day_open": 0, "day_high": 0, "day_low": 0, "day_current": 0, "day_range_pips": 0
+        }
+
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+
+    if df.index.tz is None:
+        df.index = df.index.tz_localize("UTC")
+    else:
+        df.index = df.index.tz_convert("UTC")
+
+    df_day = df[df.index.date == eval_date]
+    if df_day.empty:
+        latest_date = df.index.date[-1]
+        df_day = df[df.index.date == latest_date]
+        date_str = latest_date.strftime("%Y-%m-%d")
+
+    day_open = float(df_day.iloc[0]['Open'])
+    day_high = float(df_day['High'].max())
+    day_low = float(df_day['Low'].min())
+    day_current = float(df_day.iloc[-1]['Close'])
+
+    is_forex = "=X" in ticker
+    is_jpy = "JPY" in ticker
+    pip_mult = 100 if is_jpy else (10000 if is_forex else 1)
+    range_pips = (day_high - day_low) * pip_mult
+
+    direction = "WAIT"
+    entry_val = None
+    sl_val = None
+    tp1_val = None
+    tp2_val = None
+
+    if isinstance(setup, dict):
+        direction = str(setup.get("direction", "WAIT")).upper()
+        if "entry" in setup and "sl" in setup:
+            e_num, s_num, t1_num, t2_num = extract_prices(
+                setup.get("entry", ""),
+                setup.get("tp", ""),
+                setup.get("sl", "")
+            )
+            entry_val = e_num if e_num is not None else (setup.get("entry") if isinstance(setup.get("entry"), (int, float)) else None)
+            sl_val = s_num if s_num is not None else (setup.get("sl") if isinstance(setup.get("sl"), (int, float)) else None)
+            tp1_val = t1_num if t1_num is not None else (setup.get("tp1") if isinstance(setup.get("tp1"), (int, float)) else None)
+            tp2_val = t2_num if t2_num is not None else (setup.get("tp2") if isinstance(setup.get("tp2"), (int, float)) else None)
+
+    # Case 1: WAIT
+    if direction == "WAIT" or not entry_val or not sl_val:
+        return {
+            "ticker": ticker,
+            "status": "SAFE (WAIT)",
+            "direction": "WAIT",
+            "pnl_r": 0.0,
+            "date_str": date_str,
+            "day_open": round(day_open, 5),
+            "day_high": round(day_high, 5),
+            "day_low": round(day_low, 5),
+            "day_current": round(day_current, 5),
+            "day_range_pips": round(range_pips, 1),
+            "summary": f"Model doporučil zůstat mimo trh (WAIT). Od půlnoci (00:00) do půlnoci (23:59) se trh pohyboval v rozmezí {round(range_pips, 1)} pipů (High: {round(day_high, 5)}, Low: {round(day_low, 5)}). Vyčkáním byl kapitál úspěšně ochráněn před falešnými pohyby."
+        }
+
+    # Case 2: LONG or SHORT
+    entry_triggered = False
+    trigger_time = None
+    outcome = "PENDING"
+    pnl_r = 0.0
+    outcome_time = None
+
+    for idx, row in df_day.iterrows():
+        h = float(row['High'])
+        l = float(row['Low'])
+        t_str = idx.strftime("%H:%M UTC")
+
+        if not entry_triggered:
+            if direction == "LONG" and l <= entry_val:
+                entry_triggered = True
+                trigger_time = t_str
+            elif direction == "SHORT" and h >= entry_val:
+                entry_triggered = True
+                trigger_time = t_str
+            continue
+
+        if direction == "LONG":
+            if sl_val and l <= sl_val:
+                outcome = "LOSS (SL Hit)"
+                pnl_r = -1.0
+                outcome_time = t_str
+                break
+            elif tp2_val and h >= tp2_val:
+                outcome = "FULL WIN (TP2)"
+                pnl_r = round(abs(tp2_val - entry_val) / abs(entry_val - sl_val), 1) if abs(entry_val - sl_val) > 0 else 3.0
+                outcome_time = t_str
+                break
+            elif tp1_val and h >= tp1_val:
+                outcome = "WIN (TP1)"
+                pnl_r = round(abs(tp1_val - entry_val) / abs(entry_val - sl_val), 1) if abs(entry_val - sl_val) > 0 else 1.8
+                outcome_time = t_str
+                break
+        elif direction == "SHORT":
+            if sl_val and h >= sl_val:
+                outcome = "LOSS (SL Hit)"
+                pnl_r = -1.0
+                outcome_time = t_str
+                break
+            elif tp2_val and l <= tp2_val:
+                outcome = "FULL WIN (TP2)"
+                pnl_r = round(abs(entry_val - tp2_val) / abs(sl_val - entry_val), 1) if abs(sl_val - entry_val) > 0 else 3.0
+                outcome_time = t_str
+                break
+            elif tp1_val and l <= tp1_val:
+                outcome = "WIN (TP1)"
+                pnl_r = round(abs(entry_val - tp1_val) / abs(sl_val - entry_val), 1) if abs(sl_val - entry_val) > 0 else 1.8
+                outcome_time = t_str
+                break
+
+    if not entry_triggered:
+        return {
+            "ticker": ticker,
+            "status": "UNTRIGGERED",
+            "direction": direction,
+            "pnl_r": 0.0,
+            "date_str": date_str,
+            "day_open": round(day_open, 5),
+            "day_high": round(day_high, 5),
+            "day_low": round(day_low, 5),
+            "day_current": round(day_current, 5),
+            "day_range_pips": round(range_pips, 1),
+            "summary": f"Vstup nebyl během dne aktivován. Cena se pohybovala mezi {round(day_low, 5)} a {round(day_high, 5)} a nedosáhla na plánovanou hladinu vstupu {entry_val}."
+        }
+
+    if outcome == "PENDING":
+        if direction == "LONG":
+            floating_r = (day_current - entry_val) / abs(entry_val - sl_val) if abs(entry_val - sl_val) > 0 else 0.0
+        else:
+            floating_r = (entry_val - day_current) / abs(sl_val - entry_val) if abs(sl_val - entry_val) > 0 else 0.0
+        pnl_r = round(floating_r, 1)
+
+    return {
+        "ticker": ticker,
+        "status": outcome,
+        "direction": direction,
+        "pnl_r": pnl_r,
+        "date_str": date_str,
+        "trigger_time": trigger_time,
+        "outcome_time": outcome_time,
+        "day_open": round(day_open, 5),
+        "day_high": round(day_high, 5),
+        "day_low": round(day_low, 5),
+        "day_current": round(day_current, 5),
+        "day_range_pips": round(range_pips, 1),
+        "summary": f"Vstup aktivován v {trigger_time}. Výsledek do konce dne: {outcome} ({pnl_r:+.1f} R)."
+    }
 
 def evaluate_trade_history(check_live=False):
     """
-    Evaluates recorded trade setups against recent market price action.
-    Determines if trade hit TP1, TP2, or SL. Computes Win-Rate and Net R.
+    Evaluates recorded trade setups against market price action from midnight to midnight.
+    Computes Win-Rate and Net R.
     """
-    history_file = "scratch/trade_history.json"
-    if not os.path.exists(history_file):
-        return {"trades": [], "wins": 0, "losses": 0, "pending": 0, "win_rate": 0, "net_r": 0}
-        
-    try:
-        with open(history_file, "r") as f:
-            trades = json.load(f)
-    except Exception:
-        return {"trades": [], "wins": 0, "losses": 0, "pending": 0, "win_rate": 0, "net_r": 0}
+    trades = load_trade_history()
+    if not trades:
+        return {"trades": [], "wins": 0, "losses": 0, "pending": 0, "safe_waits": 0, "win_rate": 0, "net_r": 0}
 
     updated = False
-    
     if check_live:
-        import yfinance as yf
         for t in trades:
-            if t.get("status") == "PENDING":
-                ticker = t.get("ticker")
-                direction = t.get("direction")
-                entry = t.get("entry")
-                sl = t.get("sl")
-                tp1 = t.get("tp1")
-                tp2 = t.get("tp2")
-                
-                try:
-                    df_check = yf.download(ticker, period="5d", interval="15m", progress=False)
-                    if df_check.empty:
-                        continue
-                    if isinstance(df_check.columns, pd.MultiIndex):
-                        df_check.columns = df_check.columns.get_level_values(0)
-                        
-                    for _, row in df_check.tail(150).iterrows():
-                        h = float(row['High'])
-                        l = float(row['Low'])
-                        
-                        if direction == "LONG":
-                            if sl and l <= sl:
-                                t["status"] = "LOSS (SL Hit)"
-                                t["pnl_r"] = -1.0
-                                updated = True
-                                break
-                            elif tp2 and h >= tp2:
-                                t["status"] = "FULL WIN (TP2)"
-                                rrr = abs(tp2 - entry) / abs(entry - sl) if abs(entry - sl) > 0 else 2.5
-                                t["pnl_r"] = round(rrr, 1)
-                                updated = True
-                                break
-                            elif tp1 and h >= tp1:
-                                t["status"] = "WIN (TP1)"
-                                rrr = abs(tp1 - entry) / abs(entry - sl) if abs(entry - sl) > 0 else 1.5
-                                t["pnl_r"] = round(rrr, 1)
-                                updated = True
-                                break
-                        elif direction == "SHORT":
-                            if sl and h >= sl:
-                                t["status"] = "LOSS (SL Hit)"
-                                t["pnl_r"] = -1.0
-                                updated = True
-                                break
-                            elif tp2 and l <= tp2:
-                                t["status"] = "FULL WIN (TP2)"
-                                rrr = abs(entry - tp2) / abs(sl - entry) if abs(sl - entry) > 0 else 2.5
-                                t["pnl_r"] = round(rrr, 1)
-                                updated = True
-                                break
-                            elif tp1 and l <= tp1:
-                                t["status"] = "WIN (TP1)"
-                                rrr = abs(entry - tp1) / abs(sl - entry) if abs(sl - entry) > 0 else 1.5
-                                t["pnl_r"] = round(rrr, 1)
-                                updated = True
-                                break
-                except Exception:
-                    pass
-                    
+            if t.get("direction") in ["LONG", "SHORT"] and t.get("status") in ["PENDING", "UNTRIGGERED"]:
+                res = evaluate_day_outcome(t.get("ticker"), t, eval_date=t.get("date") or t.get("time"))
+                if res.get("status") not in ["DATA_UNAVAILABLE"]:
+                    t["status"] = res["status"]
+                    t["pnl_r"] = res["pnl_r"]
+                    t["day_summary"] = res["summary"]
+                    updated = True
+
         if updated:
-            try:
-                with open(history_file, "w") as f:
-                    json.dump(trades, f, indent=2)
-            except Exception:
-                pass
+            persist_trade_history(trades)
 
     wins = sum(1 for t in trades if "WIN" in t.get("status", ""))
     losses = sum(1 for t in trades if "LOSS" in t.get("status", ""))
-    pending = sum(1 for t in trades if "PENDING" in t.get("status", ""))
+    safe_waits = sum(1 for t in trades if "SAFE" in t.get("status", ""))
+    pending = sum(1 for t in trades if t.get("status") in ["PENDING", "UNTRIGGERED"])
     closed = wins + losses
     win_rate = round((wins / closed * 100), 1) if closed > 0 else 0.0
     net_r = round(sum(t.get("pnl_r", 0) for t in trades), 1)
-    
+
     return {
         "trades": trades,
         "wins": wins,
         "losses": losses,
+        "safe_waits": safe_waits,
         "pending": pending,
         "win_rate": win_rate,
         "net_r": net_r
@@ -2922,16 +3102,71 @@ if st.session_state.current_page == "Dashboard":
     # 3. Win-Rate & Trade Outcome Tracker
     st.markdown("<br>", unsafe_allow_html=True)
     with st.container(border=True):
-        col_tr_head, col_tr_btn = st.columns([0.7, 0.3])
+        col_tr_head, col_tr_btn = st.columns([0.65, 0.35])
         with col_tr_head:
             st.markdown("<h3 style='margin:0; font-size: 1.25rem; display:flex; align-items:center; gap:8px;'>🏆 Win-Rate & Outcome Tracker (Sledování reálných výsledků)</h3>", unsafe_allow_html=True)
-            st.caption("Automatické sledování zasažení TP1, TP2 nebo SL u doporučených obchodů.")
+            st.caption("Automatické vyhodnocení trhu a doporučených obchodů na celý den (od půlnoci 00:00 do 23:59 UTC).")
         with col_tr_btn:
-            check_live_btn = st.button("🔄 Vyhodnotit obchody", use_container_width=True)
+            check_live_btn = st.button("🔄 Vyhodnotit obchod (Celý den 00:00 – 23:59)", use_container_width=True)
 
-        eval_data = evaluate_trade_history(check_live=check_live_btn)
         if check_live_btn:
-            st.toast("✅ Obchody byly zkontrolovány vůči aktuálním tržním cenám!")
+            with st.spinner(f"Vyhodnocuji dnešní svíčky pro {ticker} od půlnoci (00:00 UTC)..."):
+                cur_setup = None
+                if st.session_state.get('ai_analysis_data') and isinstance(st.session_state.ai_analysis_data, dict):
+                    cur_setup = st.session_state.ai_analysis_data.get("trade_setup")
+                
+                day_res = evaluate_day_outcome(ticker, cur_setup)
+                st.session_state.daily_evaluation = day_res
+                
+                if cur_setup:
+                    save_trade_to_history(ticker, st.session_state.get('tf_interval', '1d'), cur_setup, cur_setup.get("rationale", ""))
+                
+                eval_data = evaluate_trade_history(check_live=True)
+                st.toast("✅ Dnešní obchod byl úspěšně vyhodnocen od půlnoci do půlnoci!")
+        else:
+            eval_data = evaluate_trade_history(check_live=False)
+
+        # Show Daily Evaluation Banner if available
+        if st.session_state.get('daily_evaluation'):
+            d = st.session_state.daily_evaluation
+            st_val = d.get('status', 'PENDING')
+            if 'WIN' in st_val:
+                b_class = 'badge-win'
+                b_border = '#10B981'
+            elif 'LOSS' in st_val:
+                b_class = 'badge-loss'
+                b_border = '#EF4444'
+            elif 'SAFE' in st_val:
+                b_class = 'badge-safe'
+                b_border = '#38BDF8'
+            else:
+                b_class = 'badge-pending'
+                b_border = '#F59E0B'
+
+            st.markdown(f'''
+            <div style="background: rgba(15, 23, 42, 0.7); border: 1px solid {b_border}; border-radius: 10px; padding: 16px; margin: 15px 0;">
+                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+                    <div>
+                        <span style="font-weight:700; font-size:1.05rem; color:#F8FAFC;">📅 Denní vyhodnocení: {d.get('ticker')}</span>
+                        <span style="color:#94A3B8; font-size:0.85rem; margin-left:8px;">(Od půlnoci 00:00 do 23:59 UTC • {d.get('date_str')})</span>
+                    </div>
+                    <div>
+                        <span class="{b_class}">{st_val}</span>
+                        <span style="font-weight:700; color:{b_border}; font-size:1rem; margin-left:8px;">{d.get('pnl_r', 0):+.1f} R</span>
+                    </div>
+                </div>
+                <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap:10px; margin-top:14px; font-size:0.85rem; background:rgba(0,0,0,0.25); padding:10px; border-radius:8px;">
+                    <div><span style="color:#64748B;">Půlnoční Open:</span><br><b style="color:#F8FAFC;">{d.get('day_open')}</b></div>
+                    <div><span style="color:#64748B;">Maximum dne:</span><br><b style="color:#10B981;">{d.get('day_high')}</b></div>
+                    <div><span style="color:#64748B;">Minimum dne:</span><br><b style="color:#EF4444;">{d.get('day_low')}</b></div>
+                    <div><span style="color:#64748B;">Denní rozpětí:</span><br><b style="color:#38BDF8;">{d.get('day_range_pips')} pipů</b></div>
+                    <div><span style="color:#64748B;">Aktuální cena:</span><br><b style="color:#F8FAFC;">{d.get('day_current')}</b></div>
+                </div>
+                <div style="margin-top:12px; font-size:0.85rem; color:#CBD5E1; line-height:1.5;">
+                    <b>Detail dne:</b> {d.get('summary')}
+                </div>
+            </div>
+            ''', unsafe_allow_html=True)
         
         # Metric Cards
         m_c1, m_c2, m_c3, m_c4 = st.columns(4)
@@ -2945,24 +3180,27 @@ if st.session_state.current_page == "Dashboard":
             st.metric("⏳ Čekající", f"{eval_data['pending']}")
 
         if eval_data['trades']:
-            with st.expander("📋 Seznam zaznamenaných obchodů", expanded=False):
+            with st.expander("📋 Seznam zaznamenaných obchodů", expanded=True):
                 for t in reversed(eval_data['trades'][-15:]):
                     st_val = t.get('status', 'PENDING')
                     if 'WIN' in st_val:
                         b_class = 'badge-win'
                     elif 'LOSS' in st_val:
                         b_class = 'badge-loss'
+                    elif 'SAFE' in st_val:
+                        b_class = 'badge-safe'
                     else:
                         b_class = 'badge-pending'
                         
-                    d_col = "#10B981" if t.get('direction') == "LONG" else "#EF4444"
+                    d_col = "#10B981" if t.get('direction') == "LONG" else ("#EF4444" if t.get('direction') == "SHORT" else "#38BDF8")
+                    e_str = f"Vstup: {t.get('entry')} | SL: {t.get('sl')} | TP1: {t.get('tp1')}" if t.get('direction') != "WAIT" else "Mimo trh (Ochrana kapitálu)"
                     st.markdown(f'''
                     <div style="display:flex; justify-content:space-between; align-items:center; padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,0.05); font-size:0.85rem;">
                         <div>
                             <span style="font-weight:700; color:{d_col};">{t.get('direction')}</span>
                             <b style="color:#F8FAFC; margin-left:6px;">{t.get('ticker')}</b>
                             <span style="color:#64748B; margin-left:6px;">({t.get('tf')}) • {t.get('time')}</span>
-                            <div style="color:#94A3B8; font-size:0.75rem; margin-top:2px;">Vstup: {t.get('entry')} | SL: {t.get('sl')} | TP1: {t.get('tp1')}</div>
+                            <div style="color:#94A3B8; font-size:0.75rem; margin-top:2px;">{e_str}</div>
                         </div>
                         <div style="text-align:right;">
                             <span class="{b_class}">{st_val}</span>
@@ -2971,7 +3209,7 @@ if st.session_state.current_page == "Dashboard":
                     </div>
                     ''', unsafe_allow_html=True)
         else:
-            st.info("Zatím nebyly zaznamenány žádné obchody. Jakmile AI doporučí LONG nebo SHORT, automaticky se zde objeví a začne vyhodnocovat.")
+            st.info("Zatím nebyly zaznamenány žádné obchody. Jakmile AI doporučí setup nebo kliknete na 'Vyhodnotit obchod', automaticky se zde zobrazí.")
 
 else:
     # --- Settings Page Content ---

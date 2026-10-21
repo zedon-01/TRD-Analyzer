@@ -1,0 +1,53 @@
+[
+  {
+    "id": "EURUSD_2026-10-21",
+    "ticker": "EURUSD=X",
+    "tf": "1h",
+    "time": "2026-10-21 08:30",
+    "date": "2026-10-21",
+    "direction": "WAIT",
+    "entry_type": "CONFIRMATION",
+    "confirmation_trigger": "ATR compression / Unemployment claims hazard",
+    "entry": null,
+    "sl": null,
+    "tp1": null,
+    "tp2": null,
+    "status": "SAFE (WAIT)",
+    "pnl_r": 0.0,
+    "rationale": "Trh v n\u00edzk\u00e9 volatilit\u011b p\u0159ed makro zpr\u00e1vami. Vy\u010dk\u00e1n\u00ed ochr\u00e1nilo kapit\u00e1l."
+  },
+  {
+    "id": "BTC_2026-10-20",
+    "ticker": "BTC-USD",
+    "tf": "4h",
+    "time": "2026-10-20 14:00",
+    "date": "2026-10-20",
+    "direction": "LONG",
+    "entry_type": "LIMIT",
+    "confirmation_trigger": "Sweep of weekly liquidity pool",
+    "entry": 66500.0,
+    "sl": 65200.0,
+    "tp1": 69100.0,
+    "tp2": 71500.0,
+    "status": "WIN (TP1 Hit)",
+    "pnl_r": 2.0,
+    "rationale": "Institucion\u00e1ln\u00ed odraz od 4h Discount Order Blocku s FVG."
+  },
+  {
+    "id": "EURUSD=X_1h_1792620016",
+    "ticker": "EURUSD=X",
+    "tf": "1h",
+    "time": "2026-10-22 00:00",
+    "date": "2026-10-22",
+    "direction": "LONG",
+    "entry_type": "CONFIRMATION",
+    "confirmation_trigger": "5M CHoCH after sweep of Asian Low",
+    "entry": 1.085,
+    "sl": 1.082,
+    "tp1": 1.091,
+    "tp2": 1.097,
+    "status": "PENDING",
+    "pnl_r": 0.0,
+    "rationale": "Testing win rate and trade outcome tracker"
+  }
+]
