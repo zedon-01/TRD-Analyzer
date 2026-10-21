@@ -642,8 +642,8 @@ def get_ticker_currencies(ticker):
 
 def check_news_guard(ticker_symbol):
     """
-    Evaluates whether high-impact news for this asset are occurring today or in the hazard window.
-    Hazard window: 45 min before to 15 min after a HIGH impact event.
+    Evaluates macroeconomic events occurring in the 24-hour window for this asset.
+    Flags active hazards (-15 min to +45 min of High-impact news).
     """
     events = fetch_economic_calendar()
     currencies = get_ticker_currencies(ticker_symbol)
@@ -651,39 +651,58 @@ def check_news_guard(ticker_symbol):
     
     active_hazard = False
     hazard_event = None
-    upcoming_today = []
+    upcoming_24h = []
     
     for e in events:
-        impact = e.get("impact")
+        impact = e.get("impact", "Low")
         country = e.get("country")
         
-        if country in currencies and impact in ["High", "Medium"]:
+        if country in currencies:
             try:
-                dt = datetime.fromisoformat(e.get("date"))
-                delta_min = (dt - now_utc).total_seconds() / 60.0
+                dt_str = e.get("date", "")
+                dt = datetime.fromisoformat(dt_str)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=pytz.utc)
+                else:
+                    dt = dt.astimezone(pytz.utc)
+                    
+                delta_sec = (dt - now_utc).total_seconds()
+                delta_min = delta_sec / 60.0
+                delta_h = delta_sec / 3600.0
                 
-                # Check if event is today or within 24 hours
-                if dt.date() == now_utc.date() or abs(delta_min) < 1440:
+                # Check events in the 24h window (past 1 hour up to next 24 hours)
+                if -1.0 <= delta_h <= 24.0:
+                    if delta_min < 0:
+                        rel_str = f"před {int(abs(delta_min))} min"
+                    elif delta_min < 60:
+                        rel_str = f"za {int(delta_min)} min"
+                    else:
+                        rel_str = f"za {delta_h:.1f} hod"
+                        
                     event_info = {
                         "title": e.get("title"),
                         "country": country,
                         "impact": impact,
                         "time_str": dt.strftime("%H:%M UTC"),
+                        "date_str": dt.strftime("%d.%m."),
+                        "rel_str": rel_str,
                         "delta_min": int(delta_min)
                     }
-                    upcoming_today.append(event_info)
+                    upcoming_24h.append(event_info)
                     
-                    # Hazard window: 45 min before to 15 min after
+                    # Hazard window: 45 min before to 15 min after HIGH impact
                     if impact == "High" and -15 <= delta_min <= 45:
                         active_hazard = True
                         hazard_event = event_info
             except Exception:
                 pass
                 
+    upcoming_24h.sort(key=lambda x: x["delta_min"])
     return {
         "active_hazard": active_hazard,
         "hazard_event": hazard_event,
-        "upcoming_today": upcoming_today[:5]
+        "upcoming_24h": upcoming_24h,
+        "upcoming_today": upcoming_24h  # backwards compatibility
     }
 
 
@@ -2785,11 +2804,31 @@ if st.session_state.current_page == "Dashboard":
                     </div>
                 </div>
                 ''', unsafe_allow_html=True)
-            elif news_guard.get("upcoming_today"):
-                with st.expander(f"📅 Dnešní makro kalendář pro {ticker} ({len(news_guard['upcoming_today'])} událostí)", expanded=False):
-                    for ev in news_guard["upcoming_today"]:
-                        impact_color = "#EF4444" if ev.get("impact") == "High" else "#F59E0B"
-                        st.markdown(f'<div style="display:flex; justify-content:space-between; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,0.05); font-size:0.85rem;"><span style="color:#F8FAFC;">{ev.get("title")} ({ev.get("country")})</span><span style="color:{impact_color}; font-weight:600;">{ev.get("impact")} • {ev.get("time_str")}</span></div>', unsafe_allow_html=True)
+            
+            events_24h = news_guard.get("upcoming_24h", [])
+            if events_24h:
+                with st.expander(f"📅 Makro kalendář na 24h pro {ticker} ({len(events_24h)} událostí)", expanded=False):
+                    for ev in events_24h:
+                        imp = ev.get("impact", "Low")
+                        if imp == "High":
+                            impact_badge = '<span style="background:rgba(239,68,68,0.2); color:#EF4444; border:1px solid #EF4444; padding:2px 8px; border-radius:4px; font-weight:700; font-size:0.75rem;">🔴 HIGH</span>'
+                        elif imp == "Medium":
+                            impact_badge = '<span style="background:rgba(245,158,11,0.2); color:#F59E0B; border:1px solid #F59E0B; padding:2px 8px; border-radius:4px; font-weight:700; font-size:0.75rem;">🟠 MEDIUM</span>'
+                        else:
+                            impact_badge = '<span style="background:rgba(148,163,184,0.15); color:#94A3B8; border:1px solid #64748B; padding:2px 8px; border-radius:4px; font-weight:600; font-size:0.75rem;">⚪ LOW</span>'
+                        
+                        st.markdown(f'''
+                        <div style="display:flex; justify-content:space-between; align-items:center; padding: 7px 0; border-bottom: 1px solid rgba(255,255,255,0.05); font-size:0.85rem;">
+                            <div>
+                                <b style="color:#F8FAFC; margin-right:6px;">{ev.get('country')}</b>
+                                <span style="color:#CBD5E1;">{ev.get('title')}</span>
+                            </div>
+                            <div style="display:flex; align-items:center; gap:10px;">
+                                <span style="color:#94A3B8; font-size:0.8rem;">{ev.get('time_str')} ({ev.get('rel_str')})</span>
+                                {impact_badge}
+                            </div>
+                        </div>
+                        ''', unsafe_allow_html=True)
 
             # --- AI Generated Trade Ideas Header ---
             ai_info = st.session_state.get('ai_analysis_data')
@@ -3098,118 +3137,6 @@ if st.session_state.current_page == "Dashboard":
                             response = chat_with_ai(chat_input, ai_data)
                             st.write(response)
                             st.session_state.chat_history.append({"role": "assistant", "content": response})
-
-    # 3. Win-Rate & Trade Outcome Tracker
-    st.markdown("<br>", unsafe_allow_html=True)
-    with st.container(border=True):
-        col_tr_head, col_tr_btn = st.columns([0.65, 0.35])
-        with col_tr_head:
-            st.markdown("<h3 style='margin:0; font-size: 1.25rem; display:flex; align-items:center; gap:8px;'>🏆 Win-Rate & Outcome Tracker (Sledování reálných výsledků)</h3>", unsafe_allow_html=True)
-            st.caption("Automatické vyhodnocení trhu a doporučených obchodů na celý den (od půlnoci 00:00 do 23:59 UTC).")
-        with col_tr_btn:
-            check_live_btn = st.button("🔄 Vyhodnotit obchod (Celý den 00:00 – 23:59)", use_container_width=True)
-
-        if check_live_btn:
-            with st.spinner(f"Vyhodnocuji dnešní svíčky pro {ticker} od půlnoci (00:00 UTC)..."):
-                cur_setup = None
-                if st.session_state.get('ai_analysis_data') and isinstance(st.session_state.ai_analysis_data, dict):
-                    cur_setup = st.session_state.ai_analysis_data.get("trade_setup")
-                
-                day_res = evaluate_day_outcome(ticker, cur_setup)
-                st.session_state.daily_evaluation = day_res
-                
-                if cur_setup:
-                    save_trade_to_history(ticker, st.session_state.get('tf_interval', '1d'), cur_setup, cur_setup.get("rationale", ""))
-                
-                eval_data = evaluate_trade_history(check_live=True)
-                st.toast("✅ Dnešní obchod byl úspěšně vyhodnocen od půlnoci do půlnoci!")
-        else:
-            eval_data = evaluate_trade_history(check_live=False)
-
-        # Show Daily Evaluation Banner if available
-        if st.session_state.get('daily_evaluation'):
-            d = st.session_state.daily_evaluation
-            st_val = d.get('status', 'PENDING')
-            if 'WIN' in st_val:
-                b_class = 'badge-win'
-                b_border = '#10B981'
-            elif 'LOSS' in st_val:
-                b_class = 'badge-loss'
-                b_border = '#EF4444'
-            elif 'SAFE' in st_val:
-                b_class = 'badge-safe'
-                b_border = '#38BDF8'
-            else:
-                b_class = 'badge-pending'
-                b_border = '#F59E0B'
-
-            st.markdown(f'''
-            <div style="background: rgba(15, 23, 42, 0.7); border: 1px solid {b_border}; border-radius: 10px; padding: 16px; margin: 15px 0;">
-                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
-                    <div>
-                        <span style="font-weight:700; font-size:1.05rem; color:#F8FAFC;">📅 Denní vyhodnocení: {d.get('ticker')}</span>
-                        <span style="color:#94A3B8; font-size:0.85rem; margin-left:8px;">(Od půlnoci 00:00 do 23:59 UTC • {d.get('date_str')})</span>
-                    </div>
-                    <div>
-                        <span class="{b_class}">{st_val}</span>
-                        <span style="font-weight:700; color:{b_border}; font-size:1rem; margin-left:8px;">{d.get('pnl_r', 0):+.1f} R</span>
-                    </div>
-                </div>
-                <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap:10px; margin-top:14px; font-size:0.85rem; background:rgba(0,0,0,0.25); padding:10px; border-radius:8px;">
-                    <div><span style="color:#64748B;">Půlnoční Open:</span><br><b style="color:#F8FAFC;">{d.get('day_open')}</b></div>
-                    <div><span style="color:#64748B;">Maximum dne:</span><br><b style="color:#10B981;">{d.get('day_high')}</b></div>
-                    <div><span style="color:#64748B;">Minimum dne:</span><br><b style="color:#EF4444;">{d.get('day_low')}</b></div>
-                    <div><span style="color:#64748B;">Denní rozpětí:</span><br><b style="color:#38BDF8;">{d.get('day_range_pips')} pipů</b></div>
-                    <div><span style="color:#64748B;">Aktuální cena:</span><br><b style="color:#F8FAFC;">{d.get('day_current')}</b></div>
-                </div>
-                <div style="margin-top:12px; font-size:0.85rem; color:#CBD5E1; line-height:1.5;">
-                    <b>Detail dne:</b> {d.get('summary')}
-                </div>
-            </div>
-            ''', unsafe_allow_html=True)
-        
-        # Metric Cards
-        m_c1, m_c2, m_c3, m_c4 = st.columns(4)
-        with m_c1:
-            st.metric("🎯 Win Rate", f"{eval_data['win_rate']}%" if (eval_data['wins'] + eval_data['losses']) > 0 else "N/A")
-        with m_c2:
-            st.metric("📈 Čistý Zisk", f"{eval_data['net_r']:+.1f} R")
-        with m_c3:
-            st.metric("⚖️ Poměr W / L", f"{eval_data['wins']} W / {eval_data['losses']} L")
-        with m_c4:
-            st.metric("⏳ Čekající", f"{eval_data['pending']}")
-
-        if eval_data['trades']:
-            with st.expander("📋 Seznam zaznamenaných obchodů", expanded=True):
-                for t in reversed(eval_data['trades'][-15:]):
-                    st_val = t.get('status', 'PENDING')
-                    if 'WIN' in st_val:
-                        b_class = 'badge-win'
-                    elif 'LOSS' in st_val:
-                        b_class = 'badge-loss'
-                    elif 'SAFE' in st_val:
-                        b_class = 'badge-safe'
-                    else:
-                        b_class = 'badge-pending'
-                        
-                    d_col = "#10B981" if t.get('direction') == "LONG" else ("#EF4444" if t.get('direction') == "SHORT" else "#38BDF8")
-                    e_str = f"Vstup: {t.get('entry')} | SL: {t.get('sl')} | TP1: {t.get('tp1')}" if t.get('direction') != "WAIT" else "Mimo trh (Ochrana kapitálu)"
-                    st.markdown(f'''
-                    <div style="display:flex; justify-content:space-between; align-items:center; padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,0.05); font-size:0.85rem;">
-                        <div>
-                            <span style="font-weight:700; color:{d_col};">{t.get('direction')}</span>
-                            <b style="color:#F8FAFC; margin-left:6px;">{t.get('ticker')}</b>
-                            <span style="color:#64748B; margin-left:6px;">({t.get('tf')}) • {t.get('time')}</span>
-                            <div style="color:#94A3B8; font-size:0.75rem; margin-top:2px;">{e_str}</div>
-                        </div>
-                        <div style="text-align:right;">
-                            <span class="{b_class}">{st_val}</span>
-                            <div style="color:#38BDF8; font-weight:700; font-size:0.8rem; margin-top:4px;">{t.get('pnl_r', 0):+.1f} R</div>
-                        </div>
-                    </div>
-                    ''', unsafe_allow_html=True)
-        else:
-            st.info("Zatím nebyly zaznamenány žádné obchody. Jakmile AI doporučí setup nebo kliknete na 'Vyhodnotit obchod', automaticky se zde zobrazí.")
 
 else:
     # --- Settings Page Content ---
