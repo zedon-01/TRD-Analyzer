@@ -2462,12 +2462,28 @@ def chat_with_ai(prompt, analysis_data):
         else:
             from google import genai
             client = genai.Client(api_key=api_key)
-            model_name = st.session_state.get('persistent_model_name', 'gemini-2.5-flash')
-            resp = client.models.generate_content(
-                model=model_name,
-                contents=f"Kontext: {context}\n\nUživatel se ptá: {prompt}"
-            )
-            return resp.text
+            models_to_try = ['gemini-2.5-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-flash-lite-latest', 'gemini-2.5-flash-lite']
+            user_model = st.session_state.get('persistent_model_name', '').strip()
+            if user_model and user_model not in DEPRECATED_GEMINI_MODELS and user_model not in models_to_try:
+                models_to_try.insert(0, user_model)
+            elif user_model and user_model in models_to_try:
+                models_to_try.remove(user_model)
+                models_to_try.insert(0, user_model)
+                
+            last_chat_err = ""
+            for m in models_to_try:
+                try:
+                    resp = client.models.generate_content(
+                        model=m,
+                        contents=f"Jsi zkušený institutional/SMC trading analytik. Stručně, jasně a věcně v češtině zodpověz dotaz uživatele k této analýze.\n\nKontext analýzy:\n{context}\n\nUživatel se ptá:\n{prompt}"
+                    )
+                    if resp and resp.text:
+                        st.session_state.persistent_model_name = m
+                        return resp.text
+                except Exception as ex:
+                    last_chat_err = str(ex)
+                    continue
+            return f"Omlouvám se, servery AI mají právě vysokou zátěž. Zkuste to za okamžik. (Detail: {last_chat_err})"
     except Exception as e:
         return f"Chyba chatu: {e}"
 
