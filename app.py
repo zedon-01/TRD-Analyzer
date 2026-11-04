@@ -2582,47 +2582,59 @@ with st.sidebar:
 
     # --- Global Sidebar Inputs (Always Defined) ---
     with st.expander("⚙️ Konfigurace Symbolů & Trhy", expanded=st.session_state.current_page == "Dashboard"):
-        st.markdown("<div style='font-size:0.8rem; font-weight:700; color:#38BDF8; margin-bottom:6px;'>⚡ RYCHLÝ VÝBĚR TRHU:</div>", unsafe_allow_html=True)
-        col_m1, col_m2 = st.columns(2)
-        with col_m1:
-            if st.button("🥇 Zlato (GC=F)", use_container_width=True, help="Zlato Futures"):
-                st.session_state.current_ticker = "GC=F"
-                st.session_state.dxm_symbol = "GC=F"
-                st.session_state.cot_symbol = "GC=F"
-                st.rerun()
-            if st.button("🛢️ Ropa WTI (CL=F)", use_container_width=True, help="Ropa Crude Oil"):
-                st.session_state.current_ticker = "CL=F"
-                st.session_state.dxm_symbol = "CL=F"
-                st.session_state.cot_symbol = "CL=F"
-                st.rerun()
-            if st.button("⚡ Bitcoin (BTC)", use_container_width=True, help="BTC-USD"):
-                st.session_state.current_ticker = "BTC-USD"
-                st.session_state.dxm_symbol = "BTC-USD"
-                st.session_state.cot_symbol = "BTC-USD"
-                st.rerun()
-        with col_m2:
-            if st.button("🥈 Stříbro (SI=F)", use_container_width=True, help="Stříbro Futures"):
-                st.session_state.current_ticker = "SI=F"
-                st.session_state.dxm_symbol = "SI=F"
-                st.session_state.cot_symbol = "SI=F"
-                st.rerun()
-            if st.button("💱 EUR/USD", use_container_width=True, help="EURUSD=X"):
-                st.session_state.current_ticker = "EURUSD=X"
-                st.session_state.dxm_symbol = "EURUSD=X"
-                st.session_state.cot_symbol = "EURUSD=X"
-                st.rerun()
-            if st.button("📈 Nasdaq (^IXIC)", use_container_width=True, help="Nasdaq 100"):
-                st.session_state.current_ticker = "^IXIC"
-                st.session_state.dxm_symbol = "^IXIC"
-                st.session_state.cot_symbol = "^IXIC"
-                st.rerun()
+        market_catalog = [
+            {"name": "🥇 Zlato (GC=F)", "symbol": "GC=F"},
+            {"name": "🛢️ Ropa WTI (CL=F)", "symbol": "CL=F"},
+            {"name": "🥈 Stříbro (SI=F)", "symbol": "SI=F"},
+            {"name": "⚡ Bitcoin (BTC-USD)", "symbol": "BTC-USD"},
+            {"name": "⚡ Ethereum (ETH-USD)", "symbol": "ETH-USD"},
+            {"name": "💱 EUR/USD (EURUSD=X)", "symbol": "EURUSD=X"},
+            {"name": "💱 GBP/USD (GBPUSD=X)", "symbol": "GBPUSD=X"},
+            {"name": "💱 USD/JPY (USDJPY=X)", "symbol": "USDJPY=X"},
+            {"name": "📈 Nasdaq 100 (^IXIC)", "symbol": "^IXIC"},
+            {"name": "📈 S&P 500 (^GSPC)", "symbol": "^GSPC"},
+            {"name": "✏️ Vlastní symbol...", "symbol": "CUSTOM"}
+        ]
         
-        st.markdown("<div style='margin-top:8px;'></div>", unsafe_allow_html=True)
-        input_ticker = st.text_input("Aktivní Symbol:", value=st.session_state.get('current_ticker', 'EURUSD=X'), help="Zadejte symbol z Yahoo Finance (např. GC=F pro Zlato, CL=F pro Ropu, EURUSD=X, BTC-USD).")
-        if input_ticker != st.session_state.get('current_ticker', 'EURUSD=X'):
-            st.session_state.current_ticker = input_ticker
+        catalog_names = [m["name"] for m in market_catalog]
+        symbol_to_name = {m["symbol"]: m["name"] for m in market_catalog if m["symbol"] != "CUSTOM"}
+        name_to_symbol = {m["name"]: m["symbol"] for m in market_catalog}
+
+        if 'current_ticker' not in st.session_state or not st.session_state.current_ticker:
+            st.session_state.current_ticker = "EURUSD=X"
+
+        current_sym = str(st.session_state.current_ticker).strip().upper()
+        default_name = symbol_to_name.get(current_sym, "✏️ Vlastní symbol...")
+        default_idx = catalog_names.index(default_name) if default_name in catalog_names else (len(catalog_names) - 1)
+
+        selected_market_name = st.selectbox(
+            "Vyberte aktivum z nabídky:",
+            catalog_names,
+            index=default_idx,
+            help="Vyberte komodity, krypto, forex, indexy nebo zadejte vlastní ticker."
+        )
+
+        if selected_market_name == "✏️ Vlastní symbol...":
+            custom_input = st.text_input(
+                "Aktivní Symbol:",
+                value=st.session_state.current_ticker if st.session_state.current_ticker not in symbol_to_name else "",
+                placeholder="např. SOL-USD, NVDA, NG=F...",
+                help="Zadejte symbol z Yahoo Finance."
+            )
+            resolved_symbol = custom_input.strip() if custom_input.strip() else st.session_state.current_ticker
+        else:
+            resolved_symbol = name_to_symbol[selected_market_name]
+
+        if resolved_symbol and resolved_symbol != st.session_state.current_ticker:
+            st.session_state.current_ticker = resolved_symbol
+            st.session_state.dxm_symbol = resolved_symbol
+            st.session_state.cot_symbol = resolved_symbol
+            st.rerun()
+
         ticker = st.session_state.current_ticker
-        
+
+        st.markdown(f'<div style="background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 6px 10px; margin-top: 6px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center;"><span style="color:#94A3B8; font-size:0.8rem;">Sledovaný trh:</span><b style="color:#00E676; font-size:0.9rem;">{ticker}</b></div>', unsafe_allow_html=True)
+
         dxm_ticker = st.text_input("DXM Symbol:", value=st.session_state.dxm_symbol)
         cot_ticker = st.text_input("COT Symbol:", value=st.session_state.cot_symbol)
 
