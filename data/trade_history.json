@@ -49,5 +49,22 @@
     "status": "PENDING",
     "pnl_r": 0.0,
     "rationale": "Testing win rate and trade outcome tracker"
+  },
+  {
+    "id": "EURUSD=X_1h_1793786487",
+    "ticker": "EURUSD=X",
+    "tf": "1h",
+    "time": "2026-11-04 11:01",
+    "date": "2026-11-04",
+    "direction": "WAIT",
+    "entry_type": "WAIT",
+    "confirmation_trigger": "N/A",
+    "entry": null,
+    "sl": null,
+    "tp1": null,
+    "tp2": null,
+    "status": "SAFE (WAIT)",
+    "pnl_r": 0.0,
+    "rationale": "P\u0159esto\u017ee vy\u0161\u0161\u00ed timeframe (4h) udr\u017euje Bullish trendov\u00fd bias a RSI se nach\u00e1z\u00ed na hodnot\u011b 71.40, trh se bl\u00ed\u017e\u00ed k vysoce rizikov\u00e9mu oknu red-fla"
   }
 ]

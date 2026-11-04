@@ -52,7 +52,9 @@ st.set_page_config(page_title="Trading Analyzer", layout="wide", initial_sidebar
 if 'current_page' not in st.session_state:
     st.session_state.current_page = "Dashboard"
 if 'watchlist' not in st.session_state:
-    st.session_state.watchlist = ["BTC-USD", "ETH-USD", "EURUSD=X", "GC=F", "^IXIC"]
+    st.session_state.watchlist = ["EURUSD=X", "GC=F", "CL=F", "SI=F", "BTC-USD", "ETH-USD", "^IXIC"]
+if 'current_ticker' not in st.session_state:
+    st.session_state.current_ticker = "EURUSD=X"
 if 'dxm_symbol' not in st.session_state:
     st.session_state.dxm_symbol = "EURUSD=X"
 if 'cot_symbol' not in st.session_state:
@@ -739,13 +741,41 @@ def calculate_position_sizing(ticker, entry, sl, tp1, tp2, account_balance, risk
     distance = abs(entry - sl)
     ticker_upper = str(ticker).upper()
     
-    if "BTC" in ticker_upper or "ETH" in ticker_upper or "SOL" in ticker_upper:
+    if "BTC" in ticker_upper or "ETH" in ticker_upper or "SOL" in ticker_upper or "CRYPTO" in ticker_upper:
         unit = "Coins"
         pos_size = risk_money / distance
         profit_tp1 = pos_size * abs(tp1 - entry) if tp1 else 0
         profit_tp2 = pos_size * abs(tp2 - entry) if tp2 else 0
-        dist_display = f"{distance:.2f} $"
-    elif "=X" in ticker_upper or any(c in ticker_upper for c in ["EUR", "USD", "GBP", "JPY", "CHF", "AUD", "CAD"]):
+        dist_display = f"${distance:.2f}"
+    elif "GC=F" in ticker_upper or "GOLD" in ticker_upper or "XAU" in ticker_upper:
+        unit = "Lots (100oz)"
+        point_value = 100.0  # 1 full point ($1 move) = $100 per standard lot
+        pos_size = risk_money / (distance * point_value) if distance > 0 else 0
+        profit_tp1 = pos_size * abs(tp1 - entry) * point_value if tp1 else 0
+        profit_tp2 = pos_size * abs(tp2 - entry) * point_value if tp2 else 0
+        dist_display = f"${distance:.2f} pts"
+    elif "SI=F" in ticker_upper or "SILVER" in ticker_upper or "XAG" in ticker_upper:
+        unit = "Lots (5000oz)"
+        point_value = 5000.0  # 1 full point move = $5,000 per lot
+        pos_size = risk_money / (distance * point_value) if distance > 0 else 0
+        profit_tp1 = pos_size * abs(tp1 - entry) * point_value if tp1 else 0
+        profit_tp2 = pos_size * abs(tp2 - entry) * point_value if tp2 else 0
+        dist_display = f"${distance:.3f} pts"
+    elif "CL=F" in ticker_upper or "OIL" in ticker_upper or "WTI" in ticker_upper:
+        unit = "Lots (1000bbl)"
+        point_value = 1000.0  # 1 full point ($1 move) = $1,000 per lot
+        pos_size = risk_money / (distance * point_value) if distance > 0 else 0
+        profit_tp1 = pos_size * abs(tp1 - entry) * point_value if tp1 else 0
+        profit_tp2 = pos_size * abs(tp2 - entry) * point_value if tp2 else 0
+        dist_display = f"${distance:.2f} pts"
+    elif "NG=F" in ticker_upper or "GAS" in ticker_upper:
+        unit = "Lots (10k mmBtu)"
+        point_value = 10000.0
+        pos_size = risk_money / (distance * point_value) if distance > 0 else 0
+        profit_tp1 = pos_size * abs(tp1 - entry) * point_value if tp1 else 0
+        profit_tp2 = pos_size * abs(tp2 - entry) * point_value if tp2 else 0
+        dist_display = f"${distance:.3f} pts"
+    elif "=X" in ticker_upper or any(c in ticker_upper for c in ["EUR", "USD", "GBP", "JPY", "CHF", "AUD", "CAD", "NZD"]):
         unit = "Lots"
         is_jpy = "JPY" in ticker_upper
         pip_size = 0.01 if is_jpy else 0.0001
@@ -755,19 +785,12 @@ def calculate_position_sizing(ticker, entry, sl, tp1, tp2, account_balance, risk
         profit_tp1 = pos_size * (abs(tp1 - entry) / pip_size) * pip_val_per_lot if tp1 else 0
         profit_tp2 = pos_size * (abs(tp2 - entry) / pip_size) * pip_val_per_lot if tp2 else 0
         dist_display = f"{pips:.1f} pips"
-    elif "GC=F" in ticker_upper or "GOLD" in ticker_upper:
-        unit = "Contracts"
-        point_value = 100.0
-        pos_size = risk_money / (distance * point_value) if distance > 0 else 0
-        profit_tp1 = pos_size * abs(tp1 - entry) * point_value if tp1 else 0
-        profit_tp2 = pos_size * abs(tp2 - entry) * point_value if tp2 else 0
-        dist_display = f"{distance:.2f} pts"
     else:
         unit = "Shares"
         pos_size = risk_money / distance
         profit_tp1 = pos_size * abs(tp1 - entry) if tp1 else 0
         profit_tp2 = pos_size * abs(tp2 - entry) if tp2 else 0
-        dist_display = f"{distance:.2f} $"
+        dist_display = f"${distance:.2f}"
 
     rrr_tp1 = abs(tp1 - entry) / distance if tp1 and distance > 0 else 0
     rrr_tp2 = abs(tp2 - entry) / distance if tp2 and distance > 0 else 0
@@ -944,6 +967,7 @@ def evaluate_day_outcome(ticker, setup=None, eval_date=None):
     is_jpy = "JPY" in ticker
     pip_mult = 100 if is_jpy else (10000 if is_forex else 1)
     range_pips = (day_high - day_low) * pip_mult
+    unit_label = "pipů" if is_forex else ("$" if any(k in str(ticker).upper() for k in ["BTC", "ETH", "SOL"]) else "bodů")
 
     direction = "WAIT"
     entry_val = None
@@ -977,7 +1001,7 @@ def evaluate_day_outcome(ticker, setup=None, eval_date=None):
             "day_low": round(day_low, 5),
             "day_current": round(day_current, 5),
             "day_range_pips": round(range_pips, 1),
-            "summary": f"Model doporučil zůstat mimo trh (WAIT). Od půlnoci (00:00) do půlnoci (23:59) se trh pohyboval v rozmezí {round(range_pips, 1)} pipů (High: {round(day_high, 5)}, Low: {round(day_low, 5)}). Vyčkáním byl kapitál úspěšně ochráněn před falešnými pohyby."
+            "summary": f"Model doporučil zůstat mimo trh (WAIT). Od půlnoci (00:00) do půlnoci (23:59) se trh pohyboval v rozmezí {round(range_pips, 1)} {unit_label} (High: {round(day_high, 5)}, Low: {round(day_low, 5)}). Vyčkáním byl kapitál úspěšně ochráněn před falešnými pohyby."
         }
 
     # Case 2: LONG or SHORT
@@ -1189,6 +1213,13 @@ def calculate_indicators(df):
         df['ADX'] = pd.Series([20] * len(df))
         df['DI_Plus'] = pd.Series([0] * len(df))
         df['DI_Minus'] = pd.Series([0] * len(df))
+    
+    # ATR (Average True Range)
+    try:
+        indicator_atr = ta.volatility.AverageTrueRange(high=df['High'], low=df['Low'], close=df['Close'], window=14)
+        df['ATR'] = indicator_atr.average_true_range()
+    except Exception:
+        df['ATR'] = df['High'] - df['Low']
     
     return df
 
@@ -2243,6 +2274,34 @@ def generate_analysis(ticker_symbol, df, fundamentals, news=None):
     else:
         guard_str = "Žádné vysoce rizikové zprávy pro tento pár v nejbližší době."
 
+    # 8. Asset-Specific SMC Rules (Crypto vs. Commodities vs. Forex)
+    t_up = str(ticker_symbol).upper()
+    is_crypto = any(c in t_up for c in ["BTC", "ETH", "SOL", "BNB", "XRP", "ADA", "DOGE"])
+    is_commodity = any(c in t_up for c in ["GC=F", "GOLD", "XAU", "SI=F", "SILVER", "XAG", "CL=F", "OIL", "WTI", "NG=F", "GAS", "HG=F", "COPPER"])
+    atr_val = vol_filters.get('atr_value', 0.0)
+    
+    if is_crypto:
+        asset_rules = f"""
+    10. **KRYPTOMĚNY ADAPTIVNÍ STRATEGIE ({ticker_symbol})**:
+        - Krypto vykazuje extrémní volatilitu a hluboké knoty (liquidity sweeps). NIKDY neumisťuj těsný SL přímo na hranu Order Blocku!
+        - Započítej dynamický ATR buffer (1.2x až 1.5x ATR, aktuální ATR={atr_val:.2f}) za hranu Order Blocku, aby běžný tržní šum nevyřadil pozici předčasně.
+        - ŘÍZENÍ POZICE (BREAKEVEN): Do pole 'rationale' VŽDY uveď závazné pravidlo: 'Při dosažení prvního cíle TP1 (+1.5R) okamžitě posuňte Stop-Loss na vstupní cenu (Breakeven - 0 riziko) pro ochranu zisku před prudkým obratem.'
+        - O víkendech za nízkého objemu vyžaduj výhradně 'CONFIRMATION' vstup.
+        """
+    elif is_commodity:
+        asset_rules = f"""
+    10. **KOMODITY ADAPTIVNÍ STRATEGIE ({ticker_symbol} - Zlato / Ropa / Stříbro)**:
+        - Komodity provádějí agresivní sweepy likvidity a falešné knoty přes zóny.
+        - STOP LOSS: Nepoužívej těsný mikro-SL! Nastav SL s dostatečným volatilním bufferem (1.0x až 1.5x ATR, aktuální ATR={atr_val:.2f}) za Order Block / swingový bod.
+        - ČASOVÉ OKNO: Pro Zlato a Ropu preferuj obchody v Newyorské seanci (13:30 - 21:00 CET), kdy trh drží čisté institucionální toky.
+        - ŘÍZENÍ POZICE (BREAKEVEN): Do pole 'rationale' VŽDY uveď závazné pravidlo: 'Jakmile trh dosáhne TP1 (+1.5R), okamžitě posuňte Stop-Loss na Breakeven pro ochranu zisku.'
+        """
+    else:
+        asset_rules = """
+    10. **FOREX / EQUITY STANDARD**:
+        - Drž se standardního SMC Order Blocku a FVG s malým spread offsetem (1-2 pips).
+        """
+
     sys_prompt = f"""
     Jsi špičkový kvantitativní analytik pro institucionální hedge-fond. Tvým úkolem je provést nekompromisní RIGORÓZNÍ AUDIT instrumentu {ticker_symbol} s využitím metodologie Smart Money Concepts (SMC) a Multi-Timeframe (MTF) analýzy.
     
@@ -2272,6 +2331,7 @@ def generate_analysis(ticker_symbol, df, fundamentals, news=None):
     8. **Pravidlo News Guard (Ochrana kapitálu před zprávami)**:
        - Pokud je v datech aktivní kritické varování News Guard (do 45 min před červenou zprávou), NESMÍŠ doporučit přímý LIMIT vstup. Vrať `direction: "WAIT"` s odůvodněním "HIGH-IMPACT NEWS HAZARD", nebo nařiď `entry_type: "CONFIRMATION"` až po uklidnění po zprávách.
     9. **Ekonomická Logika**: Špatná makro data pro danou zemi (nezaměstnanost, HDP) znamenají TLAK NA OSLABENÍ měny. Nehalucinuj o "prostoru pro nákup" bez jasného fundamentálního důvodu (např. spekulace na pivot banky).
+    {asset_rules}
     
     ### VSTUPNÍ DATA:
     - TECHNICKÝ STAV: {tech_str}
@@ -2521,8 +2581,48 @@ with st.sidebar:
     st.divider()
 
     # --- Global Sidebar Inputs (Always Defined) ---
-    with st.expander("⚙️ Konfigurace Symbolů", expanded=st.session_state.current_page == "Dashboard"):
-        ticker = st.text_input("Aktivní Symbol:", value="EURUSD=X", help="Zadejte symbol z Yahoo Finance (např. EURUSD=X).")
+    with st.expander("⚙️ Konfigurace Symbolů & Trhy", expanded=st.session_state.current_page == "Dashboard"):
+        st.markdown("<div style='font-size:0.8rem; font-weight:700; color:#38BDF8; margin-bottom:6px;'>⚡ RYCHLÝ VÝBĚR TRHU:</div>", unsafe_allow_html=True)
+        col_m1, col_m2 = st.columns(2)
+        with col_m1:
+            if st.button("🥇 Zlato (GC=F)", use_container_width=True, help="Zlato Futures"):
+                st.session_state.current_ticker = "GC=F"
+                st.session_state.dxm_symbol = "GC=F"
+                st.session_state.cot_symbol = "GC=F"
+                st.rerun()
+            if st.button("🛢️ Ropa WTI (CL=F)", use_container_width=True, help="Ropa Crude Oil"):
+                st.session_state.current_ticker = "CL=F"
+                st.session_state.dxm_symbol = "CL=F"
+                st.session_state.cot_symbol = "CL=F"
+                st.rerun()
+            if st.button("⚡ Bitcoin (BTC)", use_container_width=True, help="BTC-USD"):
+                st.session_state.current_ticker = "BTC-USD"
+                st.session_state.dxm_symbol = "BTC-USD"
+                st.session_state.cot_symbol = "BTC-USD"
+                st.rerun()
+        with col_m2:
+            if st.button("🥈 Stříbro (SI=F)", use_container_width=True, help="Stříbro Futures"):
+                st.session_state.current_ticker = "SI=F"
+                st.session_state.dxm_symbol = "SI=F"
+                st.session_state.cot_symbol = "SI=F"
+                st.rerun()
+            if st.button("💱 EUR/USD", use_container_width=True, help="EURUSD=X"):
+                st.session_state.current_ticker = "EURUSD=X"
+                st.session_state.dxm_symbol = "EURUSD=X"
+                st.session_state.cot_symbol = "EURUSD=X"
+                st.rerun()
+            if st.button("📈 Nasdaq (^IXIC)", use_container_width=True, help="Nasdaq 100"):
+                st.session_state.current_ticker = "^IXIC"
+                st.session_state.dxm_symbol = "^IXIC"
+                st.session_state.cot_symbol = "^IXIC"
+                st.rerun()
+        
+        st.markdown("<div style='margin-top:8px;'></div>", unsafe_allow_html=True)
+        input_ticker = st.text_input("Aktivní Symbol:", value=st.session_state.get('current_ticker', 'EURUSD=X'), help="Zadejte symbol z Yahoo Finance (např. GC=F pro Zlato, CL=F pro Ropu, EURUSD=X, BTC-USD).")
+        if input_ticker != st.session_state.get('current_ticker', 'EURUSD=X'):
+            st.session_state.current_ticker = input_ticker
+        ticker = st.session_state.current_ticker
+        
         dxm_ticker = st.text_input("DXM Symbol:", value=st.session_state.dxm_symbol)
         cot_ticker = st.text_input("COT Symbol:", value=st.session_state.cot_symbol)
 
@@ -3040,6 +3140,26 @@ if st.session_state.current_page == "Dashboard":
                                 <div style="background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.3); border-radius: 6px; padding: 10px 12px; margin-top: 10px; font-size: 0.85rem;">
                                     <span style="color: #F59E0B; font-weight: 700;">🎯 TRIGGER PODMÍNKA:</span>
                                     <span style="color: #E2E8F0; margin-left: 5px;">{conf_trig}</span>
+                                </div>
+                                ''', unsafe_allow_html=True)
+
+                            # Check if active asset is crypto or commodity
+                            t_check = str(ticker).upper()
+                            is_cryp = any(c in t_check for c in ["BTC", "ETH", "SOL", "BNB", "XRP"])
+                            is_comm = any(c in t_check for c in ["GC=F", "GOLD", "XAU", "SI=F", "SILVER", "CL=F", "OIL", "WTI", "NG=F", "GAS"])
+                            
+                            if is_cryp or is_comm:
+                                cat_title = "KRYPTOMĚNY" if is_cryp else "KOMODITY"
+                                st.markdown(f'''
+                                <div style="background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 6px; padding: 10px 12px; margin-top: 10px; font-size: 0.85rem;">
+                                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                                        <span style="color: #10B981; font-weight: 700;">🛡️ ADAPTIVNÍ OCHRANA ({cat_title}):</span>
+                                        <span style="background: rgba(16,185,129,0.2); color:#10B981; font-size:0.7rem; font-weight:700; padding:2px 6px; border-radius:4px;">AKTIVNÍ</span>
+                                    </div>
+                                    <div style="color: #CBD5E1; margin-top: 4px; line-height: 1.4;">
+                                        • Stop-Loss obsahuje volatilní <b>ATR buffer</b> proti vybrání knotem.<br>
+                                        • <b>Pravidlo Breakeven:</b> Jakmile trh dosáhne TP1 (+1.5R), posuňte Stop-Loss na vstupní cenu (0 riziko).
+                                    </div>
                                 </div>
                                 ''', unsafe_allow_html=True)
 
